@@ -20,6 +20,8 @@ class NodeCards {
         this._sortBy = this._loadSavedSort();
         this._filter = this._loadSavedFilter();
         this._favoritesOnly = this._loadSavedFavoritesOnly();
+        this._sparklines = new Map();
+        this._sparkObserver = null;
 
         const searchEl = document.getElementById('node-search');
         if (searchEl) {
@@ -179,10 +181,13 @@ class NodeCards {
         if (working.length === 0) {
             this._container.innerHTML =
                 '<div class="nc-empty">No nodes found</div>';
+            this._sparklines.clear();
             return;
         }
 
+        this._sparklines.clear();
         this._container.innerHTML = working.map(n => this._buildCard(n)).join('');
+        this._wireSparklines();
 
         this._container.querySelectorAll('[data-favorite-toggle]').forEach((btn) => {
             btn.addEventListener('click', (e) => {
@@ -261,9 +266,64 @@ class NodeCards {
                 <span class="nc-proto nc-proto--${proto}">${protoBadge}</span>
             </div>
             ${signal}
+            <div class="nc-card__row nc-card__row--sparkline">
+                <canvas class="nc-sparkline" data-sparkline-for="${this._esc(n.node_id)}" width="280" height="28" aria-hidden="true"></canvas>
+                <span class="nc-health" data-health-for="${this._esc(n.node_id)}" hidden></span>
+            </div>
             ${telemetry}
             ${meta}
         </div>`;
+    }
+
+    _wireSparklines() {
+        if (!window.SignalSparkline || typeof IntersectionObserver === 'undefined') return;
+
+        if (this._sparkObserver) {
+            this._sparkObserver.disconnect();
+        }
+
+        const loaded = new Set();
+        this._sparkObserver = new IntersectionObserver((entries) => {
+            entries.forEach((entry) => {
+                if (!entry.isIntersecting) return;
+                const canvas = entry.target;
+                const nodeId = canvas.dataset.sparklineFor;
+                if (!nodeId || loaded.has(nodeId)) return;
+                loaded.add(nodeId);
+                this._loadSparkline(nodeId, canvas);
+                this._sparkObserver.unobserve(canvas);
+            });
+        }, { root: this._container, rootMargin: '40px' });
+
+        this._container.querySelectorAll('[data-sparkline-for]').forEach((canvas) => {
+            this._sparkObserver.observe(canvas);
+        });
+    }
+
+    async _loadSparkline(nodeId, canvas) {
+        try {
+            const res = await fetch(
+                `/api/nodes/${encodeURIComponent(nodeId)}/metrics_history`
+                + '?hours=24&bucket_minutes=15&limit=50',
+            );
+            if (!res.ok) return;
+            const data = await res.json();
+            const buckets = data.signal_buckets || [];
+            const spark = new window.SignalSparkline(canvas);
+            spark.setBuckets(buckets, { bucketMinutes: 15 });
+            this._sparklines.set(nodeId, spark);
+
+            const health = window.SignalSparkline.classifyHealth(buckets);
+            const badge = this._container.querySelector(`[data-health-for="${nodeId}"]`);
+            if (badge && health.level) {
+                badge.hidden = false;
+                badge.className = `nc-health nc-health--${health.level}`;
+                badge.textContent = health.level;
+                badge.title = `24h avg ${health.avgRssi?.toFixed(0)} dBm`;
+            }
+        } catch (e) {
+            console.warn('Sparkline load failed:', nodeId, e);
+        }
     }
 
     _buildSignal(n) {

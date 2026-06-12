@@ -57,6 +57,42 @@ class PacketRepository:
         )
         return [self._row_to_packet(r) for r in rows]
 
+    async def get_signal_buckets(
+        self,
+        source_id: str,
+        hours: float = 24,
+        bucket_minutes: int = 15,
+    ) -> list[dict]:
+        """RSSI averages in fixed time buckets for sparkline charts."""
+        since = (
+            datetime.now(timezone.utc) - timedelta(hours=hours)
+        ).isoformat()
+        bucket_seconds = max(60, int(bucket_minutes) * 60)
+        rows = await self._db.fetch_all(
+            """
+            SELECT
+                datetime(
+                    (CAST(strftime('%s', timestamp) AS INTEGER) / ?) * ?,
+                    'unixepoch'
+                ) AS bucket,
+                AVG(rssi) AS rssi_avg,
+                COUNT(*) AS packet_count
+            FROM packets
+            WHERE source_id = ? AND rssi IS NOT NULL AND timestamp >= ?
+            GROUP BY bucket
+            ORDER BY bucket ASC
+            """,
+            (bucket_seconds, bucket_seconds, source_id, since),
+        )
+        return [
+            {
+                "bucket": f"{row['bucket']}Z" if row["bucket"] else "",
+                "rssi_avg": round(row["rssi_avg"], 1) if row["rssi_avg"] is not None else None,
+                "packet_count": row["packet_count"] or 0,
+            }
+            for row in rows
+        ]
+
     async def get_signal_history(
         self,
         source_id: str,
@@ -197,6 +233,30 @@ class PacketRepository:
             LIMIT ?
             """,
             (since, limit),
+        )
+        return [dict(row) for row in rows]
+
+    async def get_coverage_aggregates(self, since: str) -> list[dict]:
+        """Nodes with GPS plus packet RSSI aggregates for map coverage circles."""
+        rows = await self._db.fetch_all(
+            """
+            SELECT
+                n.node_id,
+                n.long_name,
+                n.short_name,
+                n.protocol,
+                n.latitude,
+                n.longitude,
+                COUNT(p.id) AS packet_count,
+                AVG(p.rssi) AS avg_rssi,
+                MAX(p.rssi) AS best_rssi
+            FROM nodes n
+            LEFT JOIN packets p
+                ON p.source_id = n.node_id AND p.timestamp >= ?
+            WHERE n.latitude IS NOT NULL AND n.longitude IS NOT NULL
+            GROUP BY n.node_id
+            """,
+            (since,),
         )
         return [dict(row) for row in rows]
 

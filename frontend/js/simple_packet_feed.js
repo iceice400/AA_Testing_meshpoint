@@ -80,7 +80,7 @@ class SimplePacketFeed {
             <td class="packet-details-cell ${typeClass}">${this._esc(details)}</td>
         `;
 
-        tr.addEventListener('click', () => this._toggleDetail(tr, packet));
+        tr.addEventListener('click', () => this._openDetail(tr, packet));
 
         this._tbody.prepend(tr);
         this._count++;
@@ -91,6 +91,21 @@ class SimplePacketFeed {
         while (this._tbody.children.length > this._maxRows * 2) {
             this._tbody.removeChild(this._tbody.lastChild);
         }
+    }
+
+    _openDetail(tr, packet) {
+        if (window.PacketDetailModal) {
+            window.PacketDetailModal.show(packet, {
+                selectedRow: tr,
+                formatNodeId: (id) => this._shortId(id),
+                onClose: () => {
+                    if (this._onFocus) this._onFocus(null);
+                },
+            });
+            if (this._onFocus) this._onFocus(packet.source_id);
+            return;
+        }
+        this._toggleDetail(tr, packet);
     }
 
     _toggleDetail(tr, packet) {
@@ -110,7 +125,6 @@ class SimplePacketFeed {
         detailTr.classList.add('packet-detail-row');
         const td = document.createElement('td');
         td.colSpan = 11;
-
 
         const payload = packet.decoded_payload;
         if (payload && typeof payload === 'object') {

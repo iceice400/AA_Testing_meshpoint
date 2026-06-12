@@ -12,6 +12,7 @@ from src._so_compat_check import warn_if_stale_so_files
 from src.analytics.network_mapper import NetworkMapper
 from src.analytics.signal_analyzer import SignalAnalyzer
 from src.analytics.traffic_monitor import TrafficMonitor
+from src.api.alert_emitter import AlertEmitter, build_alert_payload
 from src.api.audit import AuditLogWriter
 from src.api.audit import dependencies as audit_deps
 from src.api.auth import dependencies as auth_deps
@@ -223,8 +224,37 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
 
         _wire_native_relay(pipeline, tx_service)
 
-        global _noise_floor_emitter_task
         import asyncio
+
+        alert_emitter = AlertEmitter(pipeline.node_repo, ws_manager)
+        await alert_emitter.start()
+        pipeline.on_packet(alert_emitter.on_packet)
+
+        storm_guard = (
+            pipeline.relay_manager.storm_guard
+            if pipeline.relay_manager
+            else None
+        )
+        if storm_guard is not None:
+            loop = asyncio.get_running_loop()
+
+            def _on_storm_quarantine(entry) -> None:
+                loop.create_task(alert_emitter._emit(
+                    build_alert_payload(
+                        "storm_guard",
+                        node_id=entry.node_id,
+                        title="Storm guard quarantine",
+                        body=(
+                            f"Node !{entry.node_id[-4:]} quarantined "
+                            f"({entry.reason})."
+                        ),
+                        extra={"reason": entry.reason},
+                    )
+                ))
+
+            storm_guard.set_on_quarantine(_on_storm_quarantine)
+
+        global _noise_floor_emitter_task
         _noise_floor_emitter_task = asyncio.get_running_loop().create_task(
             _noise_floor_emitter_loop(noise_floor_tracker, ws_manager)
         )
@@ -286,6 +316,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
             await position_broadcaster.stop()
         if _webhook_engine is not None:
             await _webhook_engine.stop()
+        await alert_emitter.stop()
         await upstream.stop()
         await pipeline.stop()
         session_manager.shutdown()
@@ -319,6 +350,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
     app.include_router(upstream_config_routes.router, dependencies=protected)
     app.include_router(device_config_routes.router, dependencies=protected)
     app.include_router(gps_status.router, dependencies=protected)
+    app.include_router(gps_pps_status.router, dependencies=protected)
     app.include_router(system_config_routes.router, dependencies=protected)
     app.include_router(meshcore_config_routes.router, dependencies=protected)
     app.include_router(config_routes.router, dependencies=protected)

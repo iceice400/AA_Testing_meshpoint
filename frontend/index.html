@@ -32,6 +32,8 @@
     <link rel="stylesheet" href="css/radio_cards.css" />
     <link rel="stylesheet" href="css/radio_channels.css" />
     <link rel="stylesheet" href="css/radio_readout.css" />
+    <link rel="stylesheet" href="css/packet_detail_modal.css" />
+    <link rel="stylesheet" href="css/map_coverage.css" />
     <link rel="stylesheet" href="css/stats.css" />
     <link rel="stylesheet" href="css/topology.css" />
     <link rel="stylesheet" href="css/status_strip.css" />
@@ -364,7 +366,10 @@
                     <div class="dashboard__main">
                         <section class="dashboard__map">
                             <div class="panel">
-                                <div class="panel__header">Node Map</div>
+                                <div class="panel__header panel__header--map">
+                                    <span>Node Map</span>
+                                    <span id="map-unplotted" class="map-unplotted" hidden></span>
+                                </div>
                                 <div id="map" class="panel__body map-container"></div>
                             </div>
                         </section>
@@ -768,9 +773,12 @@
     <script src="js/node_cards_sort.js"></script>
     <script src="js/node_cards.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/qrcode@1.5.4/build/qrcode.min.js"></script>
     <script src="js/node_metrics_chart.js"></script>
     <script src="js/node_drawer.js"></script>
+    <script src="js/packet_detail_modal.js"></script>
     <script src="js/simple_packet_feed.js"></script>
+    <script src="js/signal_sparkline.js"></script>
     <script src="js/messaging_contacts.js"></script>
     <script src="js/messaging_chat.js"></script>
     <script src="js/messaging.js"></script>
@@ -812,6 +820,7 @@
     <script src="js/configuration/radio_card.js"></script>
     <script src="js/configuration/nodeinfo_config_card.js"></script>
     <script src="js/configuration/channels_card.js"></script>
+    <script src="js/configuration/quick_deploy_card.js"></script>
     <script src="js/configuration/meshcore_card.js"></script>
     <script src="js/configuration/transmit_card.js"></script>
     <script src="js/configuration/mqtt_card.js"></script>

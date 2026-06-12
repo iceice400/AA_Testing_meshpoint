@@ -510,6 +510,14 @@ info "Installing sudoers rule for service management..."
 cp "${MESHPOINT_DIR}/config/sudoers-meshpoint" /etc/sudoers.d/meshpoint
 chmod 440 /etc/sudoers.d/meshpoint
 
+# Preserve git metadata when installing from a clone so Settings → Updates
+# can fetch/reset without a separate manual git init on the Pi.
+if [ -d "${SCRIPT_DIR}/.git" ] && [ ! -d "${MESHPOINT_DIR}/.git" ]; then
+    info "Bootstrapping git metadata for in-dashboard updates..."
+    cp -a "${SCRIPT_DIR}/.git" "${MESHPOINT_DIR}/.git"
+    chown -R meshpoint:meshpoint "${MESHPOINT_DIR}/.git" 2>/dev/null || true
+fi
+
 if [ -f "${MESHPOINT_DIR}/scripts/ensure_git_safe.sh" ]; then
     info "Configuring git safe.directory for ${MESHPOINT_DIR}..."
     chmod +x "${MESHPOINT_DIR}/scripts/ensure_git_safe.sh"

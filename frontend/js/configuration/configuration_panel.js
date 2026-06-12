@@ -84,9 +84,17 @@ class ConfigurationPanel {
         } else if (section === 'channels' && window.ChannelsConfigCard) {
             const host = document.getElementById('cfg-channels-panel');
             if (host) {
-                host.innerHTML = '';
+                host.innerHTML = `
+                    <div data-cfg-quick-deploy></div>
+                    <div data-cfg-channels-edit></div>
+                `;
+                if (window.QuickDeployCard) {
+                    const quick = new window.QuickDeployCard(api);
+                    quick.mount(host.querySelector('[data-cfg-quick-deploy]'));
+                    this._cards.set('quick-deploy', quick);
+                }
                 const card = new window.ChannelsConfigCard(api);
-                card.mount(host);
+                card.mount(host.querySelector('[data-cfg-channels-edit]'));
                 this._cards.set('channels', card);
             }
         } else if (section === 'meshcore' && window.MeshcoreConfigCard) {

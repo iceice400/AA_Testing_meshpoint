@@ -18,6 +18,7 @@ from pydantic import BaseModel
 
 from src.api.routes import config_enrichment, mqtt_config_routes, nodeinfo_routes
 from src.config import AppConfig, save_section_to_yaml
+from src.config_export import build_quick_deploy_export
 from src.models.device_identity import DeviceIdentity
 from src.radio.presets import (
     REGION_DEFAULTS,
@@ -49,6 +50,14 @@ def init_routes(
     _crypto = crypto
     _tx_service = tx_service
     _identity = identity
+
+
+@router.get("/export")
+async def export_quick_deploy():
+    """Public Meshtastic Quick Deploy URL + JSON (default PSK only)."""
+    if _config is None:
+        raise HTTPException(503, "Config not loaded")
+    return build_quick_deploy_export(_config)
 
 
 @router.get("")

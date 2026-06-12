@@ -47,6 +47,8 @@ class NodeMap {
 
         this._topologyLayer = L.layerGroup();
         this._topologyVisible = false;
+        this._coverageLayer = L.layerGroup();
+        this._coverageVisible = false;
         this._focusLine = null;
 
         this._markerGroup = L.markerClusterGroup({
@@ -68,7 +70,10 @@ class NodeMap {
         });
         this._map.addLayer(this._markerGroup);
 
-        const overlays = { 'Topology Links': this._topologyLayer };
+        const overlays = {
+            'Topology Links': this._topologyLayer,
+            'Coverage circles': this._coverageLayer,
+        };
         L.control.layers(null, overlays, { position: 'topright', collapsed: true }).addTo(this._map);
 
         this._map.on('overlayadd', (e) => {
@@ -76,10 +81,17 @@ class NodeMap {
                 this._topologyVisible = true;
                 this._loadTopology();
             }
+            if (e.layer === this._coverageLayer) {
+                this._coverageVisible = true;
+                this._loadCoverage();
+            }
         });
         this._map.on('overlayremove', (e) => {
             if (e.layer === this._topologyLayer) {
                 this._topologyVisible = false;
+            }
+            if (e.layer === this._coverageLayer) {
+                this._coverageVisible = false;
             }
         });
 
@@ -402,6 +414,59 @@ class NodeMap {
                 line.setStyle({ opacity });
             }
         }, 200);
+    }
+
+    async _loadCoverage() {
+        try {
+            const res = await fetch('/api/nodes/coverage?hours=168');
+            if (!res.ok) return;
+            const data = await res.json();
+            this._coverageLayer.clearLayers();
+
+            const colors = {
+                excellent: '#00e5a0',
+                good: '#06b6d4',
+                fair: '#f59e0b',
+                poor: '#ef4444',
+                unknown: '#64748b',
+            };
+
+            for (const node of data.plotted || []) {
+                const quality = node.quality || 'unknown';
+                const radius = Math.min(8000, Math.max(400, (node.packet_count || 1) * 25));
+                const circle = L.circle(
+                    [node.latitude, node.longitude],
+                    {
+                        radius,
+                        color: colors[quality] || colors.unknown,
+                        fillColor: colors[quality] || colors.unknown,
+                        fillOpacity: 0.12,
+                        weight: 1.5,
+                        className: `coverage-circle coverage-circle--${quality}`,
+                    },
+                );
+                const label = node.display_name || node.node_id;
+                const rssi = node.avg_rssi != null ? `${node.avg_rssi} dBm avg` : 'no RSSI';
+                circle.bindTooltip(`${label}<br>${rssi}<br>${node.packet_count || 0} pkts`);
+                this._coverageLayer.addLayer(circle);
+            }
+
+            const unplottedEl = document.getElementById('map-unplotted');
+            if (unplottedEl) {
+                const count = data.unplotted_count || 0;
+                if (count > 0) {
+                    unplottedEl.hidden = false;
+                    unplottedEl.classList.add('map-unplotted--visible');
+                    unplottedEl.textContent = `${count} unplotted`;
+                } else {
+                    unplottedEl.hidden = true;
+                    unplottedEl.classList.remove('map-unplotted--visible');
+                    unplottedEl.textContent = '';
+                }
+            }
+        } catch (e) {
+            console.error('Coverage load failed:', e);
+        }
     }
 
     async _loadTopology() {
