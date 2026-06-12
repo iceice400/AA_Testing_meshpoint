@@ -25,6 +25,22 @@ from src.relay.mqtt_formatter import (
 
 logger = logging.getLogger(__name__)
 
+MQTT_PLAIN_PORT = 1883
+MQTT_TLS_PORT = 8883
+
+
+def resolve_mqtt_connect_port(port: int, tls_enabled: bool) -> int:
+    """Return the broker port to use for connect().
+
+    TLS MQTT conventionally listens on 8883; port 1883 is plain MQTT. A
+    common misconfiguration enables ``tls_enabled`` while leaving the
+    default 1883 port, which makes the broker close the TLS handshake.
+    """
+    if tls_enabled and port == MQTT_PLAIN_PORT:
+        return MQTT_TLS_PORT
+    return port
+
+
 try:
     import paho.mqtt.client as paho_mqtt
     from paho.mqtt.client import CallbackAPIVersion
@@ -112,21 +128,34 @@ class MqttPublisher:
                     self._config.username, self._config.password
                 )
 
-            if getattr(self._config, "tls_enabled", False):
+            tls_enabled = bool(getattr(self._config, "tls_enabled", False))
+            connect_port = resolve_mqtt_connect_port(self._config.port, tls_enabled)
+            if connect_port != self._config.port:
+                logger.warning(
+                    "MQTT tls_enabled with port %d is invalid; connecting on %d",
+                    self._config.port,
+                    connect_port,
+                )
+
+            if tls_enabled:
                 ca_path = (getattr(self._config, "tls_ca_cert", "") or "").strip()
                 if ca_path:
                     self._client.tls_set(ca_certs=ca_path)
                 else:
                     self._client.tls_set()
-                logger.info("MQTT TLS enabled for %s:%d", self._config.broker, self._config.port)
+                logger.info(
+                    "MQTT TLS enabled for %s:%d",
+                    self._config.broker,
+                    connect_port,
+                )
 
             self._client.connect(
-                self._config.broker, self._config.port, keepalive=60
+                self._config.broker, connect_port, keepalive=60
             )
             self._client.loop_start()
             logger.info(
                 "MQTT connecting to %s:%d as %s",
-                self._config.broker, self._config.port, self._gateway_id,
+                self._config.broker, connect_port, self._gateway_id,
             )
             logger.info(
                 "MQTT topic prefix resolved: %s",

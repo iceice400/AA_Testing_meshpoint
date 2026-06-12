@@ -554,8 +554,25 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
     _apply_yaml(cfg, _validated_config_path(local))
     _resolve_radio_frequency(cfg.radio)
     _validate_gps_pps_config(cfg)
+    _normalize_mqtt_config(cfg.mqtt)
 
     return cfg
+
+
+def _normalize_mqtt_config(mqtt: MqttConfig) -> None:
+    """Correct common TLS/port mismatches loaded from local.yaml."""
+    from src.relay.mqtt_publisher import resolve_mqtt_connect_port
+
+    corrected = resolve_mqtt_connect_port(mqtt.port, mqtt.tls_enabled)
+    if corrected == mqtt.port:
+        return
+    logger.warning(
+        "mqtt.port=%d with tls_enabled=true is invalid; normalized to %d. "
+        "Save MQTT settings from the dashboard to persist the fix.",
+        mqtt.port,
+        corrected,
+    )
+    mqtt.port = corrected
 
 
 def _validate_gps_pps_config(cfg: AppConfig) -> None:

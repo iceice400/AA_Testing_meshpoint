@@ -19,7 +19,7 @@ from src.api.audit.dependencies import get_audit_writer
 from src.api.auth.dependencies import require_admin
 from src.api.auth.jwt_session import SessionClaims
 from src.config import AppConfig, MqttConfig, save_section_to_yaml
-from src.relay.mqtt_publisher import _resolve_gateway_id
+from src.relay.mqtt_publisher import _resolve_gateway_id, resolve_mqtt_connect_port
 
 logger = logging.getLogger(__name__)
 
@@ -154,11 +154,18 @@ async def update_mqtt(
     topic_root = (req.topic_root.strip() or "msh").strip("/")
     region = req.region_segment.strip() or _config.mqtt.region
     username = req.username.strip() or _config.mqtt.username
+    broker_port = resolve_mqtt_connect_port(req.broker_port, req.tls_enabled)
+    if broker_port != req.broker_port:
+        logger.warning(
+            "MQTT save: tls_enabled with port %d corrected to %d",
+            req.broker_port,
+            broker_port,
+        )
 
     updates: dict = {
         "enabled": req.enabled,
         "broker": broker,
-        "port": req.broker_port,
+        "port": broker_port,
         "username": username,
         "topic_root": topic_root,
         "region": region,
@@ -180,7 +187,7 @@ async def update_mqtt(
         params={
             "enabled": req.enabled,
             "broker": broker,
-            "port": req.broker_port,
+            "port": broker_port,
             "topic_root": topic_root,
             "region": region,
             "channel_count": len(req.publish_channels),
@@ -215,7 +222,7 @@ async def update_mqtt(
         "MQTT config updated: enabled=%s broker=%s:%s channels=%s json=%s ha=%s",
         req.enabled,
         broker,
-        req.broker_port,
+        broker_port,
         len(req.publish_channels),
         req.publish_json,
         req.homeassistant_discovery,

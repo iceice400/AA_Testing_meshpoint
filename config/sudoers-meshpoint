@@ -35,7 +35,7 @@ meshpoint ALL=(ALL) NOPASSWD: /usr/bin/git rev-parse HEAD
 meshpoint ALL=(ALL) NOPASSWD: /usr/bin/git rev-parse *
 
 # ── Git safe.directory (root-owned install tree) ──────────────────────
-meshpoint ALL=(ALL) NOPASSWD: /bin/bash /opt/meshpoint/scripts/ensure_git_safe.sh
+meshpoint ALL=(ALL) NOPASSWD: /bin/bash /opt/meshpoint/scripts/ensure_git_safe.sh *
 
 # ── Post-update hooks ─────────────────────────────────────────────────
 meshpoint ALL=(ALL) NOPASSWD: /opt/meshpoint/venv/bin/pip install *

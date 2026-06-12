@@ -8,7 +8,23 @@ from unittest.mock import MagicMock
 
 from src.config import MqttConfig
 from src.models.packet import PacketType
-from src.relay.mqtt_publisher import HomeAssistantDiscovery, MqttPublisher, _generate_gateway_id
+from src.relay.mqtt_publisher import (
+    HomeAssistantDiscovery,
+    MqttPublisher,
+    _generate_gateway_id,
+    resolve_mqtt_connect_port,
+)
+
+
+class TestMqttConnectPort(unittest.TestCase):
+    def test_tls_on_plain_port_uses_8883(self):
+        self.assertEqual(resolve_mqtt_connect_port(1883, True), 8883)
+
+    def test_plain_mqtt_keeps_1883(self):
+        self.assertEqual(resolve_mqtt_connect_port(1883, False), 1883)
+
+    def test_explicit_tls_port_unchanged(self):
+        self.assertEqual(resolve_mqtt_connect_port(8883, True), 8883)
 
 
 class TestGatewayId(unittest.TestCase):
