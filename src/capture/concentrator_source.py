@@ -42,6 +42,7 @@ class ConcentratorCaptureSource(CaptureSource):
             spi_path=spi_path,
             sx1261_spi_path=sx1261_spi_path,
         )
+        self._radio_config = radio_config
         self._channel_plan = self._resolve_channel_plan(
             channel_plan, radio_config
         )
@@ -83,6 +84,13 @@ class ConcentratorCaptureSource(CaptureSource):
             self._wrapper.reset()
 
         self._wrapper.configure(self._channel_plan)
+        if self._radio_config is not None:
+            self._wrapper.configure_gps_pps(
+                enabled=self._radio_config.gps_pps_enabled,
+                tty_path=self._radio_config.gps_pps_tty_path,
+                gps_family=self._radio_config.gps_family,
+                target_baud=self._radio_config.gps_pps_target_baud,
+            )
 
         if late_reset:
             # Perform reset as late as possible, right before lgw_start().

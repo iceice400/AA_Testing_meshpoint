@@ -11,6 +11,7 @@ class NodeDrawer {
         this._sections = {};
         this._metricsChart = null;
         this._metricsHours = 24;
+        this._remoteConfig = null;
 
         if (window.MeshpointNodeFavorites) {
             window.MeshpointNodeFavorites.onChange(() => this._refreshFavoriteButton());
@@ -41,6 +42,10 @@ class NodeDrawer {
         if (this._metricsChart) {
             this._metricsChart.destroy();
             this._metricsChart = null;
+        }
+        if (this._remoteConfig) {
+            this._remoteConfig.destroy();
+            this._remoteConfig = null;
         }
         this._drawer.classList.remove('nd-drawer--open');
         this._currentNode = null;
@@ -110,6 +115,7 @@ class NodeDrawer {
 
         body.innerHTML = '';
         body.appendChild(this._buildActions(n));
+        this._mountRemoteConfig(body, n);
         body.appendChild(this._buildMetricsChartSection(n));
         body.appendChild(this._buildInfoSection(n));
         body.appendChild(this._buildSignalSection(n));
@@ -143,6 +149,16 @@ class NodeDrawer {
         }
 
         return div;
+    }
+
+    _mountRemoteConfig(body, n) {
+        if (this._remoteConfig) {
+            this._remoteConfig.destroy();
+            this._remoteConfig = null;
+        }
+        if (!window.NodeRemoteConfigPanel) return;
+        this._remoteConfig = new window.NodeRemoteConfigPanel();
+        this._remoteConfig.mount(body, n);
     }
 
     _buildInfoSection(n) {

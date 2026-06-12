@@ -52,6 +52,15 @@ class MeshcoreUsbUpdate(BaseModel):
     enable_source: Optional[bool] = None
 
 
+class StormGuardUpdate(BaseModel):
+    enabled: Optional[bool] = None
+    window_seconds: Optional[int] = Field(None, ge=10, le=600)
+    identical_packet_threshold: Optional[int] = Field(None, ge=2, le=50)
+    rate_threshold_per_minute: Optional[int] = Field(None, ge=5, le=600)
+    quarantine_duration_seconds: Optional[int] = Field(None, ge=30, le=3600)
+    notify_dashboard: Optional[bool] = None
+
+
 class RelayUpdate(BaseModel):
     enabled: Optional[bool] = None
     serial_port: Optional[str] = None
@@ -64,6 +73,7 @@ class RelayUpdate(BaseModel):
     priority_list: Optional[list[str]] = None
     dedup_ttl_seconds: Optional[int] = Field(None, ge=5, le=3600)
     channel_throttle_percent: Optional[dict[str, float]] = None
+    storm_guard: Optional[StormGuardUpdate] = None
 
 
 class RadioAdvancedUpdate(BaseModel):
@@ -237,6 +247,45 @@ async def update_relay(
         updates["channel_throttle_percent"] = relay.channel_throttle_percent
         hot_reload = True
 
+    storm_guard_hot_reload = False
+    if req.storm_guard is not None:
+        sg = relay.storm_guard
+        sg_updates: dict = {}
+        sg_req = req.storm_guard
+        if sg_req.enabled is not None:
+            sg.enabled = sg_req.enabled
+            sg_updates["enabled"] = sg.enabled
+            storm_guard_hot_reload = True
+        if sg_req.window_seconds is not None:
+            sg.window_seconds = sg_req.window_seconds
+            sg_updates["window_seconds"] = sg.window_seconds
+            storm_guard_hot_reload = True
+        if sg_req.identical_packet_threshold is not None:
+            sg.identical_packet_threshold = sg_req.identical_packet_threshold
+            sg_updates["identical_packet_threshold"] = sg.identical_packet_threshold
+            storm_guard_hot_reload = True
+        if sg_req.rate_threshold_per_minute is not None:
+            sg.rate_threshold_per_minute = sg_req.rate_threshold_per_minute
+            sg_updates["rate_threshold_per_minute"] = sg.rate_threshold_per_minute
+            storm_guard_hot_reload = True
+        if sg_req.quarantine_duration_seconds is not None:
+            sg.quarantine_duration_seconds = sg_req.quarantine_duration_seconds
+            sg_updates["quarantine_duration_seconds"] = sg.quarantine_duration_seconds
+            storm_guard_hot_reload = True
+        if sg_req.notify_dashboard is not None:
+            sg.notify_dashboard = sg_req.notify_dashboard
+            sg_updates["notify_dashboard"] = sg.notify_dashboard
+            storm_guard_hot_reload = True
+        if sg_updates:
+            updates["storm_guard"] = {
+                "enabled": sg.enabled,
+                "window_seconds": sg.window_seconds,
+                "identical_packet_threshold": sg.identical_packet_threshold,
+                "rate_threshold_per_minute": sg.rate_threshold_per_minute,
+                "quarantine_duration_seconds": sg.quarantine_duration_seconds,
+                "notify_dashboard": sg.notify_dashboard,
+            }
+
     if not updates:
         return {"saved": False, "restart_required": False}
 
@@ -247,6 +296,9 @@ async def update_relay(
             save_section_to_yaml("relay", updates)
         except PermissionError as exc:
             raise HTTPException(403, str(exc)) from exc
+
+    if storm_guard_hot_reload and _relay_manager is not None:
+        _relay_manager.reload_storm_guard(relay.storm_guard)
 
     if hot_reload and _relay_manager is not None:
         _relay_manager.reload_filters(

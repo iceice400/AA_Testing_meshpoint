@@ -11,6 +11,11 @@ radio:
   sync_word: 0x2B
   preamble_length: 16
   tx_power_dbm: 22
+  # HAL GPS/PPS sync (concentrator timestamps; separate from location.source):
+  # gps_pps_enabled: false
+  # gps_pps_tty_path: "/dev/ttyAMA0"
+  # gps_family: "ubx7"
+  # gps_pps_target_baud: 0
 
 meshtastic:
   default_key_b64: "AQ=="
@@ -66,12 +71,17 @@ relay:
   # channel_throttle_percent:
   #   "0": 100
   #   "1": 50
-  # storm_guard:
-  #   enabled: false
-  #   window_seconds: 60
-  #   identical_packet_threshold: 5
-  #   rate_threshold_per_minute: 30
-  #   quarantine_duration_seconds: 300
+  storm_guard:
+    enabled: false
+    window_seconds: 60
+    identical_packet_threshold: 5
+    rate_threshold_per_minute: 30
+    quarantine_duration_seconds: 300
+
+signal_health:
+  green_rssi_floor: -100
+  yellow_rssi_floor: -115
+  min_packets_per_hour: 5
 
 upstream:
   enabled: true

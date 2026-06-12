@@ -69,6 +69,16 @@ def enrich_config_payload(cfg: AppConfig, base: dict) -> dict:
     base["radio_advanced"] = {
         "spectral_scan_interval_seconds": radio.spectral_scan_interval_seconds,
         "sx1261_spi_path": radio.sx1261_spi_path or "",
+        "gps_pps_enabled": radio.gps_pps_enabled,
+        "gps_pps_tty_path": radio.gps_pps_tty_path,
+        "gps_family": radio.gps_family,
+        "gps_pps_target_baud": radio.gps_pps_target_baud,
+    }
+    sh = cfg.signal_health
+    base["signal_health"] = {
+        "green_rssi_floor": sh.green_rssi_floor,
+        "yellow_rssi_floor": sh.yellow_rssi_floor,
+        "min_packets_per_hour": sh.min_packets_per_hour,
     }
     base["location"] = {
         "source": location.source,

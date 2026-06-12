@@ -72,6 +72,41 @@ class RelayFiltersCard {
                     </p>
                 </header>
                 <p class="cfg-field__hint" data-storm-guard-config></p>
+                <form class="cfg-form" data-storm-guard-form>
+                    <label class="cfg-field cfg-field--inline">
+                        <input type="checkbox" data-sg-enabled>
+                        <span class="cfg-field__label">Enable storm guard</span>
+                    </label>
+                    <div class="cfg-row">
+                        <label class="cfg-field">
+                            <span class="cfg-field__label">Window (seconds)</span>
+                            <input class="cfg-field__input" type="number" min="10" max="600"
+                                   data-sg-window>
+                        </label>
+                        <label class="cfg-field">
+                            <span class="cfg-field__label">Replay threshold</span>
+                            <input class="cfg-field__input" type="number" min="2" max="50"
+                                   data-sg-replay>
+                        </label>
+                    </div>
+                    <div class="cfg-row">
+                        <label class="cfg-field">
+                            <span class="cfg-field__label">Rate threshold (/min)</span>
+                            <input class="cfg-field__input" type="number" min="5" max="600"
+                                   data-sg-rate>
+                        </label>
+                        <label class="cfg-field">
+                            <span class="cfg-field__label">Quarantine (seconds)</span>
+                            <input class="cfg-field__input" type="number" min="30" max="3600"
+                                   data-sg-quarantine>
+                        </label>
+                    </div>
+                    <div class="cfg-card__actions">
+                        <button class="terminal-button terminal-button--primary"
+                                type="submit">Save storm guard</button>
+                    </div>
+                    <p class="cfg-status" data-storm-guard-save-status aria-live="polite"></p>
+                </form>
                 <div class="cfg-quarantine-list" data-quarantine-list></div>
                 <p class="cfg-status" data-quarantine-status aria-live="polite"></p>
             </article>
@@ -84,6 +119,8 @@ class RelayFiltersCard {
         this._quarantineList = this._root.querySelector('[data-quarantine-list]');
         this._quarantineStatus = this._root.querySelector('[data-quarantine-status]');
         this._stormGuardConfig = this._root.querySelector('[data-storm-guard-config]');
+        this._stormGuardForm = this._root.querySelector('[data-storm-guard-form]');
+        this._stormGuardSaveStatus = this._root.querySelector('[data-storm-guard-save-status]');
 
         this._root.querySelector('[data-blocklist-add]').addEventListener('click', () => {
             this._addId('blocklist');
@@ -92,6 +129,9 @@ class RelayFiltersCard {
             this._addId('priority');
         });
         this._form.addEventListener('submit', (e) => this._onSubmit(e));
+        if (this._stormGuardForm) {
+            this._stormGuardForm.addEventListener('submit', (e) => this._onStormGuardSubmit(e));
+        }
     }
 
     render(config) {
@@ -108,16 +148,47 @@ class RelayFiltersCard {
 
     _paintStormGuardConfig(sg) {
         if (!this._stormGuardConfig) return;
-        if (!sg.enabled) {
-            this._stormGuardConfig.textContent =
-                'Storm guard is disabled. Enable relay.storm_guard in local.yaml.';
-            return;
+        const enabled = !!sg.enabled;
+        this._stormGuardConfig.textContent = enabled
+            ? 'Active thresholds (hot-reload on save):'
+            : 'Storm guard is disabled — enable below or in local.yaml.';
+        const set = (sel, val) => {
+            const el = this._root.querySelector(sel);
+            if (el) el.value = val;
+        };
+        const enabledEl = this._root.querySelector('[data-sg-enabled]');
+        if (enabledEl) enabledEl.checked = enabled;
+        set('[data-sg-window]', sg.window_seconds ?? 60);
+        set('[data-sg-replay]', sg.identical_packet_threshold ?? 5);
+        set('[data-sg-rate]', sg.rate_threshold_per_minute ?? 30);
+        set('[data-sg-quarantine]', sg.quarantine_duration_seconds ?? 300);
+    }
+
+    async _onStormGuardSubmit(event) {
+        event.preventDefault();
+        const payload = {
+            storm_guard: {
+                enabled: this._root.querySelector('[data-sg-enabled]').checked,
+                window_seconds: Number(this._root.querySelector('[data-sg-window]').value),
+                identical_packet_threshold: Number(this._root.querySelector('[data-sg-replay]').value),
+                rate_threshold_per_minute: Number(this._root.querySelector('[data-sg-rate]').value),
+                quarantine_duration_seconds: Number(this._root.querySelector('[data-sg-quarantine]').value),
+            },
+        };
+        this._setStormGuardSaveStatus('pending', 'Saving…');
+        const result = await this._api.put('/api/config/relay', payload);
+        if (result) {
+            this._setStormGuardSaveStatus('success', 'Storm guard saved (hot-reloaded).');
+            this._api.refresh();
+        } else {
+            this._setStormGuardSaveStatus('error', 'Save failed.');
         }
-        this._stormGuardConfig.textContent =
-            `Window ${sg.window_seconds ?? 60}s · `
-            + `replay ≥${sg.identical_packet_threshold ?? 5} · `
-            + `rate ≥${sg.rate_threshold_per_minute ?? 30}/min · `
-            + `quarantine ${sg.quarantine_duration_seconds ?? 300}s`;
+    }
+
+    _setStormGuardSaveStatus(kind, message) {
+        if (!this._stormGuardSaveStatus) return;
+        this._stormGuardSaveStatus.dataset.kind = kind;
+        this._stormGuardSaveStatus.textContent = message;
     }
 
     async _refreshQuarantineList() {

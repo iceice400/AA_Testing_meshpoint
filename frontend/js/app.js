@@ -181,6 +181,9 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (window.pushNotifications) {
             window.pushNotifications.handleAlert(data);
         }
+        if (data?.event_type === 'storm_guard' && data.node_id && nodeCards.setQuarantinedNode) {
+            nodeCards.setQuarantinedNode(data.node_id);
+        }
     });
 
     window.concentratorWS.connect();

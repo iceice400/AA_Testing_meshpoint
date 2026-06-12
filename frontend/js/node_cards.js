@@ -22,6 +22,8 @@ class NodeCards {
         this._favoritesOnly = this._loadSavedFavoritesOnly();
         this._sparklines = new Map();
         this._sparkObserver = null;
+        this._quarantinedIds = new Set();
+        this._signalThresholds = null;
 
         const searchEl = document.getElementById('node-search');
         if (searchEl) {
@@ -39,6 +41,41 @@ class NodeCards {
         if (window.MeshpointNodeFavorites) {
             window.MeshpointNodeFavorites.onChange(() => this._render());
         }
+        this._refreshQuarantineState();
+        this._quarantineTimer = setInterval(() => this._refreshQuarantineState(), 15000);
+    }
+
+    setQuarantinedNode(nodeId) {
+        if (!nodeId) return;
+        this._quarantinedIds.add(nodeId);
+        this._render();
+    }
+
+    async _refreshQuarantineState() {
+        try {
+            const res = await fetch('/api/relay/quarantine', { credentials: 'same-origin' });
+            if (!res.ok) return;
+            const data = await res.json();
+            const next = new Set(
+                (data.entries || []).map((e) => e.node_id),
+            );
+            const changed = next.size !== this._quarantinedIds.size
+                || [...next].some((id) => !this._quarantinedIds.has(id));
+            this._quarantinedIds = next;
+            if (changed) this._render();
+        } catch (_e) { /* offline / viewer */ }
+    }
+
+    async _loadSignalThresholds() {
+        if (this._signalThresholds) return this._signalThresholds;
+        try {
+            const res = await fetch('/api/config', { credentials: 'same-origin' });
+            if (res.ok) {
+                const cfg = await res.json();
+                this._signalThresholds = cfg.signal_health || null;
+            }
+        } catch (_e) { /* best-effort */ }
+        return this._signalThresholds;
     }
 
     _loadSavedSort() {
@@ -236,6 +273,9 @@ class NodeCards {
         const avatarColor = this._hashColor(n.node_id || '');
         const proto = n.protocol || 'meshtastic';
         const protoBadge = proto === 'meshcore' ? 'MC' : 'MT';
+        const quarantineBadge = this._quarantinedIds.has(n.node_id)
+            ? '<span class="nc-quarantine" title="Storm guard quarantine">Q</span>'
+            : '';
         const heardAt = n.last_heard || n.last_seen;
         const online = this._isOnline(heardAt);
         const onlineDot = online
@@ -254,7 +294,7 @@ class NodeCards {
             <div class="nc-card__top">
                 <div class="nc-avatar" style="background:${avatarColor}">${shortLabel}</div>
                 <div class="nc-card__identity">
-                    <div class="nc-card__name">${onlineDot} ${name}</div>
+                    <div class="nc-card__name">${onlineDot} ${name}${quarantineBadge}</div>
                     <div class="nc-card__heard">${this._timeAgo(heardAt)}</div>
                 </div>
                 <button type="button"
@@ -309,11 +349,12 @@ class NodeCards {
             if (!res.ok) return;
             const data = await res.json();
             const buckets = data.signal_buckets || [];
+            const thresholds = await this._loadSignalThresholds();
             const spark = new window.SignalSparkline(canvas);
             spark.setBuckets(buckets, { bucketMinutes: 15 });
             this._sparklines.set(nodeId, spark);
 
-            const health = window.SignalSparkline.classifyHealth(buckets);
+            const health = window.SignalSparkline.classifyHealth(buckets, thresholds);
             const badge = this._container.querySelector(`[data-health-for="${nodeId}"]`);
             if (badge && health.level) {
                 badge.hidden = false;

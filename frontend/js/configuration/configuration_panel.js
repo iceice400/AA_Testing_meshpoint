@@ -134,6 +134,7 @@ class ConfigurationPanel {
             if (host) {
                 host.innerHTML = `
                     <div data-cfg-advanced></div>
+                    <div data-cfg-meshradar></div>
                     <div data-cfg-relay-filters></div>
                     <div data-cfg-relay-throttle></div>
                     <div data-cfg-webhooks></div>
@@ -142,6 +143,11 @@ class ConfigurationPanel {
                     const card = new window.AdvancedConfigCard(api);
                     card.mount(host.querySelector('[data-cfg-advanced]'));
                     this._cards.set('advanced', card);
+                }
+                if (window.MeshradarConfigCard) {
+                    const card = new window.MeshradarConfigCard(api);
+                    card.mount(host.querySelector('[data-cfg-meshradar]'));
+                    this._cards.set('meshradar', card);
                 }
                 if (window.RelayFiltersCard) {
                     const card = new window.RelayFiltersCard(api);

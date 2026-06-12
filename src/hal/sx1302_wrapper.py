@@ -15,6 +15,8 @@ from dataclasses import dataclass
 from typing import Optional
 
 from src.hal.concentrator_config import ConcentratorChannelPlan
+from src.hal.sx1302_gps import HalGpsPpsSync
+from src.hal.sx1302_gps_signatures import apply_gps_signatures
 from src.hal.sx1302_signatures import apply_signatures
 from src.hal.sx1302_spectral_scan import (
     SpectralScanResult,
@@ -110,6 +112,29 @@ class SX1302Wrapper:
         self._unknown_status_count = 0
         self._spectral_scan: Optional[SX1302SpectralScan] = None
         self._sx1261_configured = False
+        self._gps_pps: Optional[HalGpsPpsSync] = None
+        self._gps_pps_enabled = False
+        self._gps_pps_tty = "/dev/ttyAMA0"
+        self._gps_family = "ubx7"
+        self._gps_pps_baud = 0
+
+    @property
+    def gps_pps(self) -> Optional[HalGpsPpsSync]:
+        return self._gps_pps
+
+    def configure_gps_pps(
+        self,
+        *,
+        enabled: bool,
+        tty_path: str = "/dev/ttyAMA0",
+        gps_family: str = "ubx7",
+        target_baud: int = 0,
+    ) -> None:
+        """Configure HAL GPS/PPS sync (started in :meth:`start`)."""
+        self._gps_pps_enabled = bool(enabled)
+        self._gps_pps_tty = tty_path or "/dev/ttyAMA0"
+        self._gps_family = gps_family or "ubx7"
+        self._gps_pps_baud = int(target_baud)
 
     def load(self) -> None:
         if not self._lib_path or not os.path.exists(self._lib_path):
@@ -182,8 +207,19 @@ class SX1302Wrapper:
             raise RuntimeError("lgw_start() failed")
         self._started = True
         logger.info("SX1302 concentrator started")
+        if self._gps_pps_enabled and self._lib is not None:
+            self._gps_pps = HalGpsPpsSync(
+                self._lib,
+                tty_path=self._gps_pps_tty,
+                gps_family=self._gps_family,
+                target_baud=self._gps_pps_baud,
+            )
+            self._gps_pps.start()
 
     def stop(self) -> None:
+        if self._gps_pps is not None:
+            self._gps_pps.stop()
+            self._gps_pps = None
         if self._started and self._lib:
             self._lib.lgw_stop()
             self._started = False
@@ -537,6 +573,7 @@ class SX1302Wrapper:
 
     def _setup_function_signatures(self) -> None:
         apply_signatures(self._lib)
+        apply_gps_signatures(self._lib)
 
     @staticmethod
     def _find_library() -> str:

@@ -4,6 +4,7 @@ import asyncio
 import logging
 from typing import Optional
 
+from src.config import StormGuardConfig
 from src.models.packet import Packet, PacketType
 from src.relay.channel_budget import ChannelBudget, build_channel_budget
 from src.relay.dedup_filter import DeduplicationFilter
@@ -137,6 +138,11 @@ class RelayManager:
                 throttle_percent=channel_throttle_percent,
                 region=region,
             )
+
+    def reload_storm_guard(self, config: StormGuardConfig) -> None:
+        """Hot-reload storm guard thresholds from updated relay config."""
+        if self._storm_guard is not None:
+            self._storm_guard.update_config(config)
 
     def evaluate(self, packet: Packet) -> RelayDecision:
         """Decide whether a captured packet should be relayed."""

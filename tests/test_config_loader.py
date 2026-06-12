@@ -18,6 +18,7 @@ from src.config import (
     AppConfig,
     _apply_yaml,
     _collect_unknown_keys,
+    _validate_gps_pps_config,
     load_config,
 )
 
@@ -142,6 +143,25 @@ class LoadConfigIntegrationTest(unittest.TestCase):
 
         self.assertEqual(cfg.transmit.hop_limit, 7)
         self.assertIn("transmit.hoplimit", "\n".join(captured.output))
+
+
+class GpsPpsConfigValidationTest(unittest.TestCase):
+    def test_rejects_shared_uart_with_location_uart(self):
+        cfg = AppConfig()
+        cfg.radio.gps_pps_enabled = True
+        cfg.radio.gps_pps_tty_path = "/dev/ttyAMA0"
+        cfg.location.source = "uart"
+        cfg.location.uart_path = "/dev/ttyAMA0"
+        with self.assertRaises(ValueError) as ctx:
+            _validate_gps_pps_config(cfg)
+        self.assertIn("cannot be the same TTY", str(ctx.exception))
+
+    def test_allows_pps_when_location_is_static(self):
+        cfg = AppConfig()
+        cfg.radio.gps_pps_enabled = True
+        cfg.radio.gps_pps_tty_path = "/dev/ttyAMA0"
+        cfg.location.source = "static"
+        _validate_gps_pps_config(cfg)
 
 
 if __name__ == "__main__":

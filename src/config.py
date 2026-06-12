@@ -68,6 +68,20 @@ class RadioConfig:
     # ``lgw_start`` after our config attempt, so we ship empty by
     # default and ask interested users to opt in explicitly.
     sx1261_spi_path: str = ""
+    # HAL GPS/PPS sync for concentrator timestamp_us (separate from location.source).
+    gps_pps_enabled: bool = False
+    gps_pps_tty_path: str = "/dev/ttyAMA0"
+    gps_family: str = "ubx7"
+    gps_pps_target_baud: int = 0
+
+
+@dataclass
+class SignalHealthConfig:
+    """Thresholds for per-node RSSI sparkline health badges (PR 05)."""
+
+    green_rssi_floor: float = -100.0
+    yellow_rssi_floor: float = -115.0
+    min_packets_per_hour: int = 5
 
 
 @dataclass
@@ -385,6 +399,7 @@ class AppConfig:
     webhooks: WebhookConfig = field(default_factory=WebhookConfig)
     automation: AutomationConfig = field(default_factory=AutomationConfig)
     stray_frames: StrayFramesConfig = field(default_factory=StrayFramesConfig)
+    signal_health: SignalHealthConfig = field(default_factory=SignalHealthConfig)
 
 
 def _resolve_radio_frequency(radio: "RadioConfig") -> None:
@@ -471,6 +486,7 @@ def _apply_yaml(cfg: AppConfig, path: Path) -> None:
         "webhooks": cfg.webhooks,
         "automation": cfg.automation,
         "stray_frames": cfg.stray_frames,
+        "signal_health": cfg.signal_health,
     }
 
     unknown_keys: list[str] = []
@@ -537,8 +553,25 @@ def load_config(config_path: Optional[str] = None) -> AppConfig:
     local = config_path or os.environ.get("CONCENTRATOR_CONFIG", "config/local.yaml")
     _apply_yaml(cfg, _validated_config_path(local))
     _resolve_radio_frequency(cfg.radio)
+    _validate_gps_pps_config(cfg)
 
     return cfg
+
+
+def _validate_gps_pps_config(cfg: AppConfig) -> None:
+    """Reject sharing one UART between HAL PPS and location uart source."""
+    if not cfg.radio.gps_pps_enabled:
+        return
+    loc = cfg.location
+    if loc.source != "uart":
+        return
+    pps_tty = (cfg.radio.gps_pps_tty_path or "").strip()
+    uart_tty = (loc.uart_path or "").strip()
+    if pps_tty and uart_tty and pps_tty == uart_tty:
+        raise ValueError(
+            "radio.gps_pps_tty_path and location.uart_path cannot be the same TTY. "
+            "Use location.source: static or gpsd for dashboard coordinates."
+        )
 
 
 def _get_local_yaml_path() -> Path:

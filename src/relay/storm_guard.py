@@ -64,6 +64,10 @@ class StormGuard:
     def enabled(self) -> bool:
         return self._config.enabled
 
+    def update_config(self, config: StormGuardConfig) -> None:
+        """Hot-reload thresholds without losing in-memory quarantine state."""
+        self._config = config
+
     def set_on_quarantine(
         self, callback: Callable[[QuarantineEntry], None] | None
     ) -> None:
