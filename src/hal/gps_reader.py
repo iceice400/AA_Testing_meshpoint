@@ -1,7 +1,9 @@
-"""GPS reader for the ZOE-M8Q module on the RAK2287 HAT.
+"""GPS reader for the ZOE-M8Q module on the RAK2287/5146 Pi HAT.
 
-The GPS is accessed via the SX1302 HAL library's GPS functions,
-or via the serial UART on the Pi (typically /dev/ttyAMA0).
+The u-blox speaks NMEA on the Pi UART (typically ``/dev/ttyAMA0`` after
+``install.sh`` frees the primary serial port from Bluetooth). This is
+separate from the SX1302/SX1303 concentrator SPI link — the "on-board GPS"
+is a distinct chip wired to GPIO TX/RX, not exposed over the LoRa HAL.
 """
 
 from __future__ import annotations
@@ -26,7 +28,7 @@ class GpsPosition:
 
 
 class GpsReader:
-    """Reads GPS data from the ZOE-M8Q module on the RAK Pi HAT."""
+    """Reads NMEA GGA sentences from an on-board UART GPS module."""
 
     def __init__(self, uart_path: str = "/dev/ttyAMA0", baud: int = 9600):
         self._uart_path = uart_path
@@ -48,7 +50,7 @@ class GpsReader:
         self._task = asyncio.create_task(
             self._read_loop(), name="gps-reader"
         )
-        logger.info("GPS reader started on %s", self._uart_path)
+        logger.info("GPS reader started on %s @ %d baud", self._uart_path, self._baud)
 
     async def stop(self) -> None:
         self._running = False
@@ -61,48 +63,41 @@ class GpsReader:
         logger.info("GPS reader stopped")
 
     async def _read_loop(self) -> None:
-        """Read NMEA sentences from the GPS UART."""
-        try:
-            reader, writer = await asyncio.open_connection(
-                self._uart_path, self._baud
-            )
-        except Exception:
-            logger.warning(
-                "GPS UART not available at %s -- using fallback polling",
-                self._uart_path,
-            )
-            await self._fallback_loop()
-            return
-
-        try:
-            while self._running:
-                line = await asyncio.wait_for(
-                    reader.readline(), timeout=5.0
-                )
-                sentence = line.decode("ascii", errors="ignore").strip()
-                self._parse_nmea(sentence)
-        except asyncio.CancelledError:
-            pass
-        finally:
-            writer.close()
-
-    async def _fallback_loop(self) -> None:
-        """Fallback: try reading GPS via serial library if available."""
+        """Read NMEA sentences from the GPS UART via pyserial."""
         try:
             import serial
-
-            ser = serial.Serial(self._uart_path, self._baud, timeout=2)
-            while self._running:
-                line = ser.readline().decode("ascii", errors="ignore").strip()
-                if line:
-                    self._parse_nmea(line)
-                await asyncio.sleep(0.1)
         except ImportError:
-            logger.warning("pyserial not installed, GPS unavailable")
+            logger.warning(
+                "pyserial not installed — GPS UART at %s unavailable",
+                self._uart_path,
+            )
             while self._running:
                 await asyncio.sleep(10)
-        except Exception:
-            logger.exception("GPS fallback failed")
+            return
+
+        ser = None
+        try:
+            ser = serial.Serial(self._uart_path, self._baud, timeout=2)
+            logger.info("GPS serial open on %s", self._uart_path)
+            while self._running:
+                line = await asyncio.to_thread(ser.readline)
+                sentence = line.decode("ascii", errors="ignore").strip()
+                if sentence:
+                    self._parse_nmea(sentence)
+        except asyncio.CancelledError:
+            pass
+        except Exception as exc:
+            logger.warning(
+                "GPS UART not available at %s @ %d baud — %s",
+                self._uart_path,
+                self._baud,
+                exc,
+            )
+            while self._running:
+                await asyncio.sleep(10)
+        finally:
+            if ser is not None and ser.is_open:
+                ser.close()
 
     def _parse_nmea(self, sentence: str) -> None:
         """Parse GGA sentences for position data."""

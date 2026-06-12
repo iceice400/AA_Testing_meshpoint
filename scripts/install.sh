@@ -128,6 +128,12 @@ if [ -f "$BOOT_CONFIG" ]; then
     else
         info "dtoverlay=disable-bt already present"
     fi
+    if ! grep -q "^enable_uart=1" "$BOOT_CONFIG"; then
+        info "Adding enable_uart=1 to ${BOOT_CONFIG}"
+        echo "enable_uart=1" >> "$BOOT_CONFIG"
+    else
+        info "enable_uart=1 already present"
+    fi
 fi
 
 # ── 3b. Install gpsd for USB GPS receivers ─────────────────────────

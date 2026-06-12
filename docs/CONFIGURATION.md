@@ -185,7 +185,7 @@ coordinates and mesh position settings hot-reload from the dashboard.
 |---|---|
 | `static` (default) | No live GPS hardware. Registered coordinates live in `device.*` only. Skyplot shows the static pin. |
 | `gpsd` | Reads live fixes from the system `gpsd` daemon over TCP (`127.0.0.1:2947`). Recommended for any USB GPS receiver (u-blox 7, u-blox 8, VFAN puck, generic CDC ACM sticks). Skyplot and stats update from the live fix. |
-| `uart` | Reserved for direct-serial reads from a Pi HAT GPS (e.g. RAK 7248). Currently a placeholder; falls back to static and surfaces an explanatory error in the dashboard. |
+| `uart` | Direct NMEA from the RAK Pi HAT u-blox on ``/dev/ttyAMA0`` (9600 baud). Requires ``install.sh`` UART setup (``disable-bt``, ``enable_uart=1``) and a reboot. Do not enable ``radio.gps_pps_enabled`` on the same TTY — use ``static`` or ``gpsd`` for dashboard coords when PPS sync owns the port. |
 
 ### Mesh position broadcasts (LoRa / Meshtastic app map)
 
@@ -253,7 +253,7 @@ in `gpsd-clients`) or `gpsmon`.
 | u-blox 7 USB stick | USB CDC ACM, NMEA + UBX | yes (RAK V2 .141) |
 | u-blox 8 USB stick | USB CDC ACM, NMEA + UBX | yes |
 | VFAN ublox 7 USB puck | USB CDC ACM, NMEA + UBX | yes |
-| RAK 7248 onboard u-blox via UART (`/dev/ttyAMA0`) | NMEA over UART | placeholder (`source: uart`, not yet wired) |
+| RAK 7248 onboard u-blox via UART (`/dev/ttyAMA0`) | NMEA over UART | `source: uart` (see [Location (GPS) source](#location-gps-source); mutually exclusive with `radio.gps_pps_enabled` on the same TTY) |
 
 Other USB receivers should work as long as `gpsd` recognizes the
 device's VID. If `cgps` shows data but the dashboard does not,
