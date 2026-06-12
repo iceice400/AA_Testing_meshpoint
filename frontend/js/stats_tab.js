@@ -72,6 +72,7 @@ class StatsTab {
         this._hourlyInterval = null;
         this._region = 'US';
         this._rendered = false;
+        this._heatmap = null;
     }
 
     async refresh() {
@@ -311,10 +312,20 @@ class StatsTab {
                         <div class="stats-card__desc">Hourly packet volume from SQLite with estimated duty cycle (est.)</div>
                         <canvas id="sc-hourly-24"></canvas>
                     </div>
+                    <div class="stats-card stats-card--full">
+                        <div class="stats-card__label">Traffic heatmap (24h)</div>
+                        <div class="stats-card__desc">Meshtastic and MeshCore intensity by hour. Darker cells mean more packets.</div>
+                        <div id="sc-traffic-heatmap" class="stats-heatmap" aria-hidden="false"></div>
+                    </div>
                 </div>
             </section>
 
         </div>`;
+
+        const heatmapHost = document.getElementById('sc-traffic-heatmap');
+        if (heatmapHost && window.TrafficHeatmap) {
+            this._heatmap = new window.TrafficHeatmap(heatmapHost);
+        }
     }
 
     _update(data) {
@@ -530,6 +541,8 @@ class StatsTab {
     }
 
     _updateHourly24(buckets, region) {
+        this._heatmap?.render(buckets);
+
         const root = getComputedStyle(document.documentElement);
         const token = (name, fallback) => root.getPropertyValue(name).trim() || fallback;
         const accentCyan = token('--accent-cyan', '#06b6d4');

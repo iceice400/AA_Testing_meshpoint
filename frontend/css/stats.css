@@ -291,6 +291,21 @@
     flex-shrink: 0;
 }
 
+.stats-heatmap {
+    margin-top: 0.5rem;
+    padding: 0.5rem 0.25rem;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border, #233049);
+    background: rgba(6, 182, 212, 0.02);
+    overflow-x: auto;
+}
+
+.stats-heatmap__svg {
+    display: block;
+    min-width: 100%;
+    height: auto;
+}
+
 @media (max-width: 768px) {
     .stats-panel { padding: 1rem; }
     .stats-strip { grid-template-columns: 1fr 1fr; }
