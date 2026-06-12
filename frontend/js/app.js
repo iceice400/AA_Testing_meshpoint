@@ -41,7 +41,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const router = new Router({
         defaultRoute: 'dashboard',
         allowedRoutes: [
-            'dashboard', 'stats', 'messages', 'radio', 'rf', 'unknown-rf', 'terminal',
+            'dashboard', 'stats', 'topology', 'messages', 'radio', 'rf', 'unknown-rf', 'terminal',
             'configuration/identity', 'configuration/radio',
             'configuration/channels', 'configuration/transmit',
             'configuration/mqtt',
@@ -177,6 +177,12 @@ document.addEventListener('DOMContentLoaded', async () => {
         _incrementPacketCount();
     });
 
+    window.concentratorWS.on('alert', (data) => {
+        if (window.pushNotifications) {
+            window.pushNotifications.handleAlert(data);
+        }
+    });
+
     window.concentratorWS.connect();
 
     setInterval(() => {
@@ -201,6 +207,10 @@ function _bootDangerousPanel(router) {
     const prefsRoot = document.getElementById('meshpoint-display-prefs');
     if (prefsRoot && window.MeshpointDisplayForm) {
         new window.MeshpointDisplayForm(prefsRoot);
+    }
+    const pushRoot = document.getElementById('push-notifications-prefs');
+    if (pushRoot && window.PushNotificationsForm) {
+        new window.PushNotificationsForm(pushRoot);
     }
     const controller = new window.DangerousPanelController(root);
     controller.bind();
@@ -506,6 +516,7 @@ function _bootCommandPaletteAndKeymap(router) {
     const routeCommands = [
         ['dashboard', 'Go to Dashboard', 'Pages'],
         ['stats', 'Go to Stats', 'Pages'],
+        ['topology', 'Go to Topology', 'Pages'],
         ['messages', 'Go to Messages', 'Pages'],
         ['radio', 'Go to Radio', 'Pages'],
         ['terminal', 'Go to Terminal', 'Pages'],

@@ -7,11 +7,12 @@ richness of the cloud per-Meshpoint stats page.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 
 from src.analytics.network_mapper import NetworkMapper
+from src.analytics.toa_estimate import sum_hourly_toa_ms
 from src.analytics.signal_analyzer import SignalAnalyzer
 from src.analytics.stats_reporter import StatsReporter
 from src.analytics.traffic_monitor import TrafficMonitor
@@ -105,6 +106,69 @@ async def stats_summary():
         "relay": relay,
         "direct_relayed": direct_relayed,
         "farthest_mesh": farthest_mesh,
+    }
+
+
+@router.get("/hourly")
+async def stats_hourly(hours: int = Query(24, ge=1, le=168)):
+    """SQL-backed hourly traffic buckets for the Stats 24h chart and heatmap."""
+    if not _packet_repo:
+        return []
+
+    try:
+        config = load_config()
+        radio = config.radio
+        default_sf = radio.spreading_factor
+        default_bw = radio.bandwidth_khz
+        default_preamble = radio.preamble_length
+        region = radio.region or "US"
+    except Exception:
+        default_sf = 11
+        default_bw = 250.0
+        default_preamble = 16
+        region = "US"
+
+    raw_rows = await _packet_repo.get_hourly_traffic(hours)
+    modem_rows = await _packet_repo.get_hourly_modem_groups(hours)
+    modem_by_hour: dict[str, list[dict]] = {}
+    for row in modem_rows:
+        hour_key = row["hour_start"]
+        modem_by_hour.setdefault(hour_key, []).append(row)
+
+    now = datetime.now(timezone.utc)
+    start = now - timedelta(hours=hours)
+    start = start.replace(minute=0, second=0, microsecond=0)
+    counts_by_hour = {row["hour_start"]: row for row in raw_rows}
+
+    buckets: list[dict] = []
+    cursor = start
+    while cursor <= now:
+        hour_key = cursor.strftime("%Y-%m-%dT%H:00:00")
+        row = counts_by_hour.get(hour_key, {})
+        meshtastic = int(row.get("meshtastic") or 0)
+        meshcore = int(row.get("meshcore") or 0)
+        total = int(row.get("total") or (meshtastic + meshcore))
+        toa_ms = sum_hourly_toa_ms(
+            modem_by_hour.get(hour_key, []),
+            default_sf=default_sf,
+            default_bw_khz=default_bw,
+            default_preamble=default_preamble,
+        )
+        duty_cycle_pct = round((toa_ms / 3_600_000) * 100, 2) if toa_ms else 0.0
+        buckets.append({
+            "hour": cursor.replace(tzinfo=timezone.utc).isoformat(),
+            "meshtastic": meshtastic,
+            "meshcore": meshcore,
+            "total": total,
+            "toa_ms_estimated": toa_ms,
+            "duty_cycle_pct": duty_cycle_pct,
+        })
+        cursor += timedelta(hours=1)
+
+    return {
+        "region": region,
+        "hours": hours,
+        "buckets": buckets,
     }
 
 

@@ -1294,7 +1294,12 @@ def _init_routes(
         telemetry_repo=coord.telemetry_repo,
     )
     packets.init_routes(coord.packet_repo)
-    analytics.init_routes(signal_analyzer, traffic_monitor, coord.packet_repo)
+    analytics.init_routes(
+        signal_analyzer,
+        traffic_monitor,
+        coord.packet_repo,
+        coord.node_repo,
+    )
     device.init_routes(identity, ws_manager, coord.relay_manager)
     telemetry.init_routes(coord.telemetry_repo)
     stats_routes.init_routes(

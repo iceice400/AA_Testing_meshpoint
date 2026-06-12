@@ -137,6 +137,84 @@ class PacketRepository:
         )
         return {r["packet_type"]: r["cnt"] for r in rows}
 
+    async def get_hourly_traffic(self, hours: int = 24) -> list[dict]:
+        """Protocol counts grouped by UTC hour for the Stats 24h view."""
+        since = (
+            datetime.now(timezone.utc) - timedelta(hours=hours)
+        ).isoformat()
+        rows = await self._db.fetch_all(
+            """
+            SELECT
+                strftime('%Y-%m-%dT%H:00:00', timestamp) AS hour_start,
+                SUM(CASE WHEN protocol = 'meshtastic' THEN 1 ELSE 0 END) AS meshtastic,
+                SUM(CASE WHEN protocol = 'meshcore' THEN 1 ELSE 0 END) AS meshcore,
+                COUNT(*) AS total
+            FROM packets
+            WHERE timestamp >= ?
+            GROUP BY hour_start
+            ORDER BY hour_start ASC
+            """,
+            (since,),
+        )
+        return [dict(row) for row in rows]
+
+    async def get_hourly_modem_groups(self, hours: int = 24) -> list[dict]:
+        """Per-hour modem buckets for duty-cycle estimates."""
+        since = (
+            datetime.now(timezone.utc) - timedelta(hours=hours)
+        ).isoformat()
+        rows = await self._db.fetch_all(
+            """
+            SELECT
+                strftime('%Y-%m-%dT%H:00:00', timestamp) AS hour_start,
+                spreading_factor AS sf,
+                bandwidth_khz AS bw,
+                COUNT(*) AS packet_count
+            FROM packets
+            WHERE timestamp >= ?
+            GROUP BY hour_start, spreading_factor, bandwidth_khz
+            """,
+            (since,),
+        )
+        return [dict(row) for row in rows]
+
+    async def get_topology_packets(
+        self,
+        since: str,
+        *,
+        limit: int = 500,
+    ) -> list[dict]:
+        """Recent topology-bearing packets within a time window."""
+        rows = await self._db.fetch_all(
+            """
+            SELECT source_id, packet_type, protocol, decoded_payload,
+                   rssi, snr, timestamp
+            FROM packets
+            WHERE timestamp >= ?
+              AND packet_type IN ('neighborinfo', 'traceroute', 'routing')
+              AND decoded_payload IS NOT NULL
+            ORDER BY timestamp DESC
+            LIMIT ?
+            """,
+            (since, limit),
+        )
+        return [dict(row) for row in rows]
+
+    async def get_node_packet_counts_since(self, since: str) -> list[dict]:
+        """Packet counts and latest RSSI per source node in a window."""
+        rows = await self._db.fetch_all(
+            """
+            SELECT source_id, protocol,
+                   COUNT(*) AS packet_count,
+                   MAX(rssi) AS latest_rssi
+            FROM packets
+            WHERE timestamp >= ?
+            GROUP BY source_id, protocol
+            """,
+            (since,),
+        )
+        return [dict(row) for row in rows]
+
     async def cleanup_old(self, max_retained: int) -> int:
         total = await self.get_count()
         if total <= max_retained:

@@ -183,6 +183,9 @@ class SidebarController {
         if (root === 'stats' && window.statsTab) {
             window.statsTab.refresh();
         }
+        if (route === 'topology' && window.topologyTab) {
+            window.topologyTab.refresh();
+        }
         if (route === 'rf' && window.rfTab) {
             window.rfTab.refresh();
         }
