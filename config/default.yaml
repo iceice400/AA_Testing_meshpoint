@@ -20,6 +20,9 @@ radio:
 meshtastic:
   default_key_b64: "AQ=="
   primary_channel_name: "LongFast"
+  # Remote ADMIN config read/write (PR 15–16); base64 admin channel PSK:
+  # admin_key_b64: ""
+  # admin_channel_name: "admin"
   # channel_keys:
   #   MyChannel: "base64encodedPSK=="
   #   SecretChat: "anotherBase64PSK=="

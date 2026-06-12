@@ -64,6 +64,10 @@ class StormGuard:
     def enabled(self) -> bool:
         return self._config.enabled
 
+    @property
+    def notify_dashboard(self) -> bool:
+        return bool(self._config.notify_dashboard)
+
     def update_config(self, config: StormGuardConfig) -> None:
         """Hot-reload thresholds without losing in-memory quarantine state."""
         self._config = config

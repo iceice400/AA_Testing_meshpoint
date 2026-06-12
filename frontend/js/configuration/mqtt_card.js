@@ -25,6 +25,7 @@ class MqttConfigCard {
                         are published. Undecrypted packets never leave the device.
                     </p>
                 </header>
+                <p class="cfg-runtime" data-mqtt-runtime aria-live="polite"></p>
                 <form class="cfg-form" data-mqtt-form>
                     <label class="cfg-field cfg-field--toggle">
                         <input type="checkbox" data-mqtt-enabled>
@@ -144,6 +145,7 @@ class MqttConfigCard {
         this._previewMc = this._root.querySelector('[data-mqtt-preview-mc]');
         this._previewJson = this._root.querySelector('[data-mqtt-preview-json]');
         this._statusEl = this._root.querySelector('[data-mqtt-status]');
+        this._runtimeEl = this._root.querySelector('[data-mqtt-runtime]');
 
         this._pass.addEventListener('input', () => { this._passwordDirty = true; });
         this._json.addEventListener('change', () => this._renderPreviews());
@@ -196,6 +198,31 @@ class MqttConfigCard {
         if (this._ha) this._ha.checked = !!mqtt.homeassistant_discovery;
         if (this._tls) this._tls.checked = !!mqtt.tls_enabled;
         this._renderPreviews(mqtt);
+        this._refreshRuntime();
+    }
+
+    async _refreshRuntime() {
+        if (!this._runtimeEl) return;
+        try {
+            const res = await fetch('/api/config/mqtt/runtime', { credentials: 'same-origin' });
+            if (!res.ok) {
+                this._runtimeEl.textContent = '';
+                return;
+            }
+            const rt = await res.json();
+            if (!rt.enabled) {
+                this._runtimeEl.textContent = 'MQTT disabled in config.';
+                this._runtimeEl.dataset.kind = 'muted';
+                return;
+            }
+            const state = rt.connected ? 'connected' : 'not connected';
+            this._runtimeEl.dataset.kind = rt.connected ? 'success' : 'warning';
+            this._runtimeEl.textContent =
+                `Runtime: ${state} · ${rt.publish_count || 0} published`
+                + (rt.gateway_id ? ` · ${rt.gateway_id}` : '');
+        } catch (_e) {
+            this._runtimeEl.textContent = '';
+        }
     }
 
     _renderPreviews(cached) {

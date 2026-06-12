@@ -77,6 +77,10 @@ class RelayFiltersCard {
                         <input type="checkbox" data-sg-enabled>
                         <span class="cfg-field__label">Enable storm guard</span>
                     </label>
+                    <label class="cfg-field cfg-field--inline">
+                        <input type="checkbox" data-sg-notify>
+                        <span class="cfg-field__label">Dashboard alerts on quarantine</span>
+                    </label>
                     <div class="cfg-row">
                         <label class="cfg-field">
                             <span class="cfg-field__label">Window (seconds)</span>
@@ -158,6 +162,8 @@ class RelayFiltersCard {
         };
         const enabledEl = this._root.querySelector('[data-sg-enabled]');
         if (enabledEl) enabledEl.checked = enabled;
+        const notifyEl = this._root.querySelector('[data-sg-notify]');
+        if (notifyEl) notifyEl.checked = sg.notify_dashboard !== false;
         set('[data-sg-window]', sg.window_seconds ?? 60);
         set('[data-sg-replay]', sg.identical_packet_threshold ?? 5);
         set('[data-sg-rate]', sg.rate_threshold_per_minute ?? 30);
@@ -169,6 +175,7 @@ class RelayFiltersCard {
         const payload = {
             storm_guard: {
                 enabled: this._root.querySelector('[data-sg-enabled]').checked,
+                notify_dashboard: this._root.querySelector('[data-sg-notify]').checked,
                 window_seconds: Number(this._root.querySelector('[data-sg-window]').value),
                 identical_packet_threshold: Number(this._root.querySelector('[data-sg-replay]').value),
                 rate_threshold_per_minute: Number(this._root.querySelector('[data-sg-rate]').value),

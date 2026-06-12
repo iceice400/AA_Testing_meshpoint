@@ -181,7 +181,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         if (window.pushNotifications) {
             window.pushNotifications.handleAlert(data);
         }
-        if (data?.event_type === 'storm_guard' && data.node_id && nodeCards.setQuarantinedNode) {
+        if (data?.alert_kind === 'storm_guard' && data.node_id && nodeCards.setQuarantinedNode) {
             nodeCards.setQuarantinedNode(data.node_id);
         }
     });
@@ -522,6 +522,8 @@ function _bootCommandPaletteAndKeymap(router) {
         ['topology', 'Go to Topology', 'Pages'],
         ['messages', 'Go to Messages', 'Pages'],
         ['radio', 'Go to Radio', 'Pages'],
+        ['rf', 'Go to RF Environment', 'Pages'],
+        ['unknown-rf', 'Go to Unknown RF', 'Pages'],
         ['terminal', 'Go to Terminal', 'Pages'],
         ['configuration/identity', 'Go to Configuration · Identity', 'Configuration'],
         ['configuration/radio', 'Go to Configuration · Radio', 'Configuration'],

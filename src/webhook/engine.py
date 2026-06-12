@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any, Optional
@@ -35,9 +36,6 @@ VALID_EVENTS = frozenset({
     "duty_spike",
     "storm_quarantine",
 })
-
-# Reserved for PR 12 — rules validate but do not fire until wired.
-_DEFERRED_EVENTS = frozenset({"storm_quarantine"})
 
 TEST_PAYLOAD_MESSAGE = (
     "Meshpoint webhook test — dummy payload, not a real mesh event"
@@ -108,7 +106,7 @@ class WebhookEngine:
         if not self._config.enabled:
             return
         for rule in self._config.rules:
-            if not rule.enabled or rule.event in _DEFERRED_EVENTS:
+            if not rule.enabled:
                 continue
             self._rules_by_event.setdefault(rule.event, []).append(rule)
 
@@ -142,12 +140,8 @@ class WebhookEngine:
                 "name": rule.name,
                 "event": rule.event,
                 "enabled": rule.enabled,
-                "active": (
-                    self._config.enabled
-                    and rule.enabled
-                    and rule.event not in _DEFERRED_EVENTS
-                ),
-                "deferred": rule.event in _DEFERRED_EVENTS,
+                "active": self._config.enabled and rule.enabled,
+                "deferred": False,
                 "url_host": _url_host(rule.url),
                 "cooldown_seconds": rule.cooldown_seconds,
                 "last_fired_at": last.fired_at.isoformat() if last else None,
@@ -191,6 +185,26 @@ class WebhookEngine:
             if rule.name == target:
                 return rule
         return None
+
+    def schedule_storm_quarantine(self, entry) -> None:
+        """Sync hook from storm guard; fires ``storm_quarantine`` webhook rules."""
+        if not self._started:
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        loop.create_task(
+            self._fire_event(
+                "storm_quarantine",
+                node_id=entry.node_id,
+                data={
+                    "reason": entry.reason,
+                    "trigger_packet_id": entry.trigger_packet_id or "",
+                    "seconds_remaining": entry.seconds_remaining(time.monotonic()),
+                },
+            )
+        )
 
     def on_packet(self, packet: Packet) -> None:
         """Sync pipeline hook; schedules async evaluation."""

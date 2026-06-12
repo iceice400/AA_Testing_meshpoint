@@ -115,6 +115,10 @@ class PipelineCoordinator:
         return self._stats_reporter
 
     @property
+    def mqtt_publisher(self) -> Optional[MqttPublisher]:
+        return self._mqtt
+
+    @property
     def location_source(self) -> LocationSource:
         """Live GPS source. Always present (defaults to ``StaticSource``)."""
         return self._location_source

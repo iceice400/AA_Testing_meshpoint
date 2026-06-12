@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Literal
+from typing import Callable, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, field_validator
@@ -26,19 +26,26 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/config", tags=["config"])
 
 _config: AppConfig | None = None
+_get_mqtt_publisher: Optional[Callable[[], object | None]] = None
 
 _GATEWAY_RE = re.compile(r"^!?[0-9a-fA-F]{8}$")
 _LOCATION_PRECISION = frozenset({"exact", "approximate", "none"})
 
 
-def init_routes(config: AppConfig) -> None:
-    global _config
+def init_routes(
+    config: AppConfig,
+    *,
+    get_mqtt_publisher: Callable[[], object | None] | None = None,
+) -> None:
+    global _config, _get_mqtt_publisher
     _config = config
+    _get_mqtt_publisher = get_mqtt_publisher
 
 
 def reset_routes() -> None:
-    global _config
+    global _config, _get_mqtt_publisher
     _config = None
+    _get_mqtt_publisher = None
 
 
 def _mqtt_tls_enabled(mqtt: MqttConfig) -> bool:
@@ -131,6 +138,35 @@ class MqttUpdate(BaseModel):
                 f"location_precision must be one of: {', '.join(sorted(_LOCATION_PRECISION))}"
             )
         return value
+
+
+@router.get("/mqtt/runtime")
+async def mqtt_runtime():
+    """Live MQTT publisher connection state (no broker secrets)."""
+    mqtt = _config.mqtt if _config is not None else None
+    if mqtt is None or not mqtt.enabled:
+        return {
+            "enabled": bool(mqtt and mqtt.enabled),
+            "connected": False,
+            "publish_count": 0,
+            "gateway_id": "",
+        }
+    pub = _get_mqtt_publisher() if _get_mqtt_publisher else None
+    if pub is None:
+        return {
+            "enabled": True,
+            "connected": False,
+            "publish_count": 0,
+            "gateway_id": _resolve_gateway_id(
+                mqtt.gateway_id, (_config.device.device_name if _config else "") or "meshpoint"
+            ),
+        }
+    return {
+        "enabled": True,
+        "connected": bool(getattr(pub, "connected", False)),
+        "publish_count": int(getattr(pub, "publish_count", 0)),
+        "gateway_id": str(getattr(pub, "gateway_id", "")),
+    }
 
 
 @router.put("/mqtt")

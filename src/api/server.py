@@ -230,30 +230,6 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
         await alert_emitter.start()
         pipeline.on_packet(alert_emitter.on_packet)
 
-        storm_guard = (
-            pipeline.relay_manager.storm_guard
-            if pipeline.relay_manager
-            else None
-        )
-        if storm_guard is not None:
-            loop = asyncio.get_running_loop()
-
-            def _on_storm_quarantine(entry) -> None:
-                loop.create_task(alert_emitter._emit(
-                    build_alert_payload(
-                        "storm_guard",
-                        node_id=entry.node_id,
-                        title="Storm guard quarantine",
-                        body=(
-                            f"Node !{entry.node_id[-4:]} quarantined "
-                            f"({entry.reason})."
-                        ),
-                        extra={"reason": entry.reason},
-                    )
-                ))
-
-            storm_guard.set_on_quarantine(_on_storm_quarantine)
-
         global _noise_floor_emitter_task
         _noise_floor_emitter_task = asyncio.get_running_loop().create_task(
             _noise_floor_emitter_loop(noise_floor_tracker, ws_manager)
@@ -285,6 +261,32 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
         pipeline.on_packet(admin_reader.try_consume_packet)
 
         await _webhook_engine.start()
+
+        storm_guard = (
+            pipeline.relay_manager.storm_guard
+            if pipeline.relay_manager
+            else None
+        )
+        if storm_guard is not None:
+            loop = asyncio.get_running_loop()
+
+            def _on_storm_quarantine(entry) -> None:
+                if storm_guard.notify_dashboard:
+                    loop.create_task(alert_emitter._emit(
+                        build_alert_payload(
+                            "storm_guard",
+                            node_id=entry.node_id,
+                            title="Storm guard quarantine",
+                            body=(
+                                f"Node !{entry.node_id[-4:]} quarantined "
+                                f"({entry.reason})."
+                            ),
+                            extra={"reason": entry.reason},
+                        )
+                    ))
+                _webhook_engine.schedule_storm_quarantine(entry)
+
+            storm_guard.set_on_quarantine(_on_storm_quarantine)
 
         _init_routes(
             pipeline,
@@ -1368,7 +1370,10 @@ def _init_routes(
         tx_service=tx_service,
         identity=identity,
     )
-    mqtt_config_routes.init_routes(config=config)
+    mqtt_config_routes.init_routes(
+        config=config,
+        get_mqtt_publisher=lambda: coord.mqtt_publisher,
+    )
     upstream_config_routes.init_routes(config=config)
     device_config_routes.init_routes(config=config, identity=identity)
     gps_status.init_routes(location_source=coord.location_source)
