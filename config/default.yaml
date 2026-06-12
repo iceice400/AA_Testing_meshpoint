@@ -1,0 +1,174 @@
+radio:
+  region: "US"
+  # Frequency: set frequency_mhz (explicit MHz) OR slot (Meshtastic 1-indexed
+  # slot number). frequency_mhz wins if both are present. If neither is set,
+  # the regional default is used. Examples:
+  #   frequency_mhz: 906.875
+  #   slot: 20
+  spreading_factor: 11
+  bandwidth_khz: 250.0
+  coding_rate: "4/5"
+  sync_word: 0x2B
+  preamble_length: 16
+  tx_power_dbm: 22
+
+meshtastic:
+  default_key_b64: "AQ=="
+  primary_channel_name: "LongFast"
+  # channel_keys:
+  #   MyChannel: "base64encodedPSK=="
+  #   SecretChat: "anotherBase64PSK=="
+  channel_keys: {}
+
+meshcore:
+  default_key_b64: ""
+  channel_keys: {}
+
+capture:
+  sources: []
+  serial_port: null
+  serial_baud: 115200
+  concentrator_spi_device: "/dev/spidev0.0"
+  meshcore_usb:
+    serial_port: null
+    baud_rate: 115200
+    auto_detect: true
+
+storage:
+  database_path: "data/concentrator.db"
+  max_packets_retained: 100000
+  cleanup_interval_seconds: 3600
+
+dashboard:
+  host: "0.0.0.0"
+  port: 8080
+  static_dir: "frontend"
+
+device:
+  device_name: "Meshpoint"
+  latitude: 0.0
+  longitude: 0.0
+  altitude: 25
+  hardware_description: "RAK2287 + Raspberry Pi 4"
+  firmware_version: "0.7.6"
+
+relay:
+  enabled: false
+  serial_port: null       # SX1262 relay radio, e.g. "/dev/ttyACM1"
+  serial_baud: 115200
+  max_relay_per_minute: 20
+  burst_size: 5
+  min_relay_rssi: -110.0
+  max_relay_rssi: -50.0
+  blocklist: []
+  priority_list: []
+  dedup_ttl_seconds: 300
+  # channel_throttle_percent:
+  #   "0": 100
+  #   "1": 50
+  # storm_guard:
+  #   enabled: false
+  #   window_seconds: 60
+  #   identical_packet_threshold: 5
+  #   rate_threshold_per_minute: 30
+  #   quarantine_duration_seconds: 300
+
+upstream:
+  enabled: true
+  url: "wss://api.meshradar.io"
+  reconnect_interval_seconds: 10
+  buffer_max_size: 5000
+  auth_token: null
+
+transmit:
+  enabled: false
+  node_id: null             # auto-generated 4-byte Meshtastic node ID
+  tx_power_dbm: 14          # conservative default (dBm)
+  # max_duty_cycle_percent omitted: auto-derives from radio.region
+  # (10% US/ANZ/KR/SG_923, 1% EU_868/IN). Override here to pin.
+  long_name: "Meshpoint"
+  short_name: "MPNT"
+  hop_limit: 3
+  nodeinfo:
+    interval_minutes: 180      # 5..1440 min, default 180 (3 hr); 0 = disabled
+    startup_delay_seconds: 60  # delay before first broadcast on boot
+  position:
+    interval_minutes: 15
+    startup_delay_seconds: 180
+    # LoRa mesh POSITION packets (Meshtastic app map). Meshradar fleet pin
+    # always uses device.latitude/longitude above, not live GPS.
+    coordinate_source: "static"   # static | live (live needs gpsd/uart source)
+    location_precision: "approximate"  # exact | approximate | none (live only)
+
+web_auth:
+  # First-run state: hashes are empty -> dashboard forces /setup.
+  # After setup, the admin hash is written via the API and the JWT
+  # secret is auto-generated. Rotating jwt_secret (e.g. via
+  # `meshpoint reset-password`) invalidates every active session.
+  admin_password_hash: ""
+  viewer_password_hash: ""
+  jwt_secret: ""
+  jwt_expiry_minutes: 480
+  allow_read_only: false
+  lockout_attempts: 5
+  lockout_cooldown_minutes: 5
+  session_version: 1
+
+mqtt:
+  enabled: false
+  broker: "mqtt.meshtastic.org"
+  port: 1883
+  username: "meshdev"
+  password: "large4cats"
+  # Topic format is "<topic_root>/<region>/2/e/<channel>/<gateway_id>".
+  # `topic_root` and `region` are concatenated with a slash, so leave
+  # `topic_root` as "msh" and use `region` for the regional segment
+  # (the Meshtastic spec). Setting topic_root to "msh/US/FL" while
+  # leaving region="US" doubles the region: msh/US/FL/US/2/e/...
+  # `mqtt.region` is independent of `radio.region`: defaults to "US".
+  topic_root: "msh"
+  region: "US"
+  # tls_enabled: false
+  # tls_ca_cert: ""
+  publish_channels:
+    - "LongFast"
+    - "MeshCore"
+  publish_json: false
+  location_precision: "exact"
+  homeassistant_discovery: false
+
+location:
+  # Where live GPS fixes come from (skyplot + optional mesh POSITION).
+  # Registered coordinates for Meshradar live in device.latitude/longitude
+  # and are not overwritten by gpsd.
+  #   static : use device.latitude/longitude/altitude (default)
+  #   gpsd   : poll a local or remote gpsd daemon for live fixes
+  #   uart   : on-board UART NMEA (RAK Pi HAT GPS)
+  source: "static"
+  # uart_path: "/dev/ttyAMA0"
+  # uart_baud: 9600
+  # gpsd connection. Defaults match the well-known local socket; only
+  # change when running gpsd on a peer machine on the LAN.
+  gpsd_host: "127.0.0.1"
+  gpsd_port: 2947
+  # How often the coordinator wakes to read the active source.
+  update_interval_seconds: 5
+  # Minimum acceptable fix mode: 0=any (incl. no-fix), 1=2D, 2=3D.
+  min_fix_quality: 1
+
+metrics:
+  enabled: false
+  require_auth: true
+
+webhooks:
+  enabled: false
+  rules: []
+
+automation:
+  enabled: false
+  token: ""
+
+stray_frames:
+  enabled: true
+  max_retained: 5000
+  retention_hours: 168

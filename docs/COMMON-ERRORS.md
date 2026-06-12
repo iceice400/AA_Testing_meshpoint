@@ -1,0 +1,1332 @@
+# Common Errors
+
+Searchable catalog of error messages, their cause, and the fix. Use Ctrl+F /
+Cmd+F to find your message. For longer diagnostic flows see
+[Troubleshooting](TROUBLESHOOTING.md). For configuration syntax see
+[Configuration](CONFIGURATION.md).
+
+If your error is not listed, capture it from `meshpoint logs` and open a
+[GitHub Issue](https://github.com/KMX415/meshpoint/issues) or ask in
+[Discord](https://discord.gg/BnhSeFXVY8).
+
+---
+
+## Messaging
+
+### Meshtastic DM shows "Sent" but recipient never gets it
+
+**Cause:** Pre-v0.6.7 Meshpoints chose a random `source_node_id` on every
+service restart and never broadcast NodeInfo, so the recipient node had no
+stable contact for the Meshpoint and could not route the DM back. The
+dashboard showed "Sent" because the packet did go out over the air; the
+recipient just had no way to associate it with a known node.
+
+**Fix:** Update to v0.6.7 or later. The Meshpoint now derives a stable
+`source_node_id` from its provisioned `device.device_id` UUID and broadcasts
+a NodeInfo packet 60 seconds after startup, then every 30 minutes. After the
+first NodeInfo lands on the witness Meshtastic node, it will form a contact
+and DMs round-trip correctly. If your witness node was offline when the
+NodeInfo went out, it picks up the next one.
+
+If you previously worked around this by setting `transmit.node_id` manually
+in `local.yaml` or via the dashboard radio tab, that value still wins (the
+config setting is the highest-priority source). No action needed.
+
+### Two Meshpoints with the same node ID breaking the mesh
+
+**Cause:** You cloned an SD card via `dd` (or `Win32DiskImager`, or any
+block-level imager) without re-running `scripts/provision.py` on the clone.
+Both Meshpoints now share the same `device.device_id` UUID, which means the
+v0.6.7 derivation produces the same `source_node_id` on both, which means
+Meshtastic mesh routing collapses for any node trying to reach either of
+them.
+
+**Fix:** On the cloned card, re-provision before first boot:
+
+```bash
+sudo python /opt/meshpoint/scripts/provision.py
+```
+
+This generates a fresh UUID and re-writes the cloud API key, hostname, and
+device ID. Alternatively, set distinct `transmit.node_id` values in each
+Meshpoint's `local.yaml` to override the derivation.
+
+When the "Golden SD image" production workflow lands (see ROADMAP.md) it
+will include an automatic first-boot re-provision step to prevent this.
+
+---
+
+## Upgrades
+
+### Recommended upgrade command (any version)
+
+Use this on Discord, in release notes, and on the Pi when you are not sure which version is installed. It is safe for v0.6.x through current: `install.sh` refreshes the venv, strips stale pre-v0.7.0 `.so` files if present, and updates sudoers/systemd without requiring a reboot on upgrade.
+
+```bash
+cd /opt/meshpoint
+sudo git fetch origin
+sudo git checkout main
+sudo git pull origin main
+sudo bash scripts/install.sh
+sudo systemctl restart meshpoint
+```
+
+Hard-refresh the dashboard (Ctrl+Shift+R). First time on v0.7.3+, complete `/setup` for the admin password.
+
+**Faster path (v0.7.3+ only, when release notes say no new deps):** `sudo git pull origin main` and `sudo systemctl restart meshpoint`. If the service fails to start, use the full block above.
+
+### `fatal: detected dubious ownership in repository at '/opt/meshpoint'`
+
+**Cause:** `/opt/meshpoint` is owned by `root`, but git was run as the
+`meshpoint` user **without** `sudo`. Common when copying upgrade commands
+that use `sudo -u meshpoint git ...` instead of `sudo git ...` from
+`/opt/meshpoint`.
+
+**Fix (one-time, as admin on the Pi):**
+
+```bash
+cd /opt/meshpoint
+sudo bash scripts/ensure_git_safe.sh /opt/meshpoint
+```
+
+Then use **`sudo git`**, not `sudo -u meshpoint git`:
+
+```bash
+cd /opt/meshpoint
+sudo systemctl stop meshpoint
+sudo git fetch origin
+sudo git checkout field/all-features    # or main, feat/v0.7.7, etc.
+sudo git pull origin field/all-features
+sudo bash scripts/install.sh
+sudo systemctl start meshpoint
+```
+
+**Dashboard path:** Settings → Updates → pick **Field: all-features
+integration** (or **Custom branch** and type `field/all-features`) →
+**Check for updates** → **Apply**. The apply chain runs `sudo
+/usr/bin/git` and calls `ensure_git_safe.sh` before fetch.
+
+**Settings shows `install_branch: null`:** Same root cause — git could
+not read HEAD. Run `ensure_git_safe.sh` above, then refresh the Updates
+panel.
+
+### `PermissionError` on `src/__pycache__` during compileall or tests
+
+**Cause:** A prior `sudo python` or `sudo compileall` left bytecode
+caches owned by `root`. The `meshpoint` service user cannot overwrite
+them.
+
+**Fix:**
+
+```bash
+sudo find /opt/meshpoint/src -type d -name __pycache__ -user root -exec rm -rf {} +
+```
+
+`post_update.sh` removes these automatically on the next dashboard apply
+or `install.sh` run.
+
+### Startup WARN: "Stale compiled core modules detected"
+
+**Cause:** Releases before v0.7.0 shipped eleven
+`.cpython-313-aarch64-linux-gnu.so` files alongside the Python source in
+`src/{hal,capture,decode,transmit}/`. v0.7.0 ships pure Python. If those
+binaries survived an upgrade (typically because you ran `git pull` without
+re-running `install.sh`), Python's import machinery will load them instead
+of the new source, freezing the affected modules at the prior version.
+
+**Fix:** Re-run the installer, which removes them automatically:
+
+```
+cd /opt/meshpoint
+sudo /opt/meshpoint/scripts/install.sh
+sudo systemctl restart meshpoint
+```
+
+Or wipe them directly without the installer:
+
+```
+sudo find /opt/meshpoint/src -name '*.cpython-*.so' -delete
+sudo systemctl restart meshpoint
+```
+
+The startup WARN lists every stale file it finds, so you can verify they
+are gone on the next boot.
+
+### `git pull` alone did not pick up v0.7.0 changes
+
+**Cause:** Same root cause as the stale-`.so` warning above. Pulling new
+source without removing the old binaries leaves Python's import machinery
+loading the stale binaries from the previous release.
+
+**Fix:** Always run `sudo /opt/meshpoint/scripts/install.sh` after
+`git pull` when crossing the v0.6.x to v0.7.0 boundary. The installer is
+idempotent and safe to re-run on any release.
+
+### Service won't start after upgrading to v0.7.3 (`ModuleNotFoundError: No module named 'bcrypt'` or `'jwt'`)
+
+**Cause:** v0.7.3 added local dashboard authentication, which requires
+two new Python dependencies (`bcrypt>=4.2.0` and `PyJWT>=2.10.0`).
+`git pull` alone fetches the new source code but does not refresh the
+venv -- the service then crashes at import time on the missing
+modules. The dashboard never opens port 8080, so the symptom looks
+like "dashboard unreachable after upgrade", not the v0.7.3.1 WS bug.
+
+The `docs/ONBOARDING.md#updating` and `README.md#updating` sections
+were missing this gotcha through the v0.7.3.0 release; they were
+patched the same day v0.7.3 shipped after a user hit it.
+
+**Fix:** Re-run `install.sh` to refresh the venv, then restart:
+
+```bash
+cd /opt/meshpoint
+sudo bash scripts/install.sh
+sudo systemctl restart meshpoint
+meshpoint status
+```
+
+`install.sh` is idempotent and reuses the existing venv, so this is
+fast (no system-package re-install). After the service comes back up,
+hard-refresh the dashboard tab (Ctrl+Shift+R / Cmd+Shift+R) and you
+should be redirected to `/login` (or `/setup` if you cleared
+`local.yaml` somehow). To confirm the missing-module symptom before
+running the fix:
+
+```bash
+sudo journalctl -u meshpoint -n 30 --no-pager | grep -iE "modulenotfound|importerror"
+```
+
+You should see one of:
+
+```
+ModuleNotFoundError: No module named 'bcrypt'
+ModuleNotFoundError: No module named 'jwt'
+```
+
+For routine updates when you are already on v0.7.3+, plain `git pull +
+systemctl restart` is often enough. If you are unsure of the installed
+version, or the service fails after a pull-only upgrade, use the
+**Recommended upgrade command** block at the top of this section.
+
+### Service crashes after Settings → Updates apply (`ModuleNotFoundError: No module named 'cryptography'`)
+
+**Cause:** Releases that add new Python dependencies (for example v0.7.6
+PKI support, which needs `cryptography>=43.0.0`) can fail at startup if
+the dashboard apply path reset git to the new branch and restarted the
+service before `pip install -r requirements.txt` finished. Older apply
+builds ran `install.sh` synchronously while the service was still up, or
+skipped pip entirely. The new code then fails at startup in
+`_bootstrap_pki()`.
+
+**Fix (recovery):** Refresh the venv, then restart:
+
+```bash
+sudo /opt/meshpoint/venv/bin/pip install -r /opt/meshpoint/requirements.txt
+sudo systemctl restart meshpoint
+```
+
+Or run the full installer (also clears stale `.so` files on older
+upgrades):
+
+```bash
+cd /opt/meshpoint
+sudo bash scripts/install.sh
+sudo systemctl restart meshpoint
+```
+
+**Prevention:** v0.7.5.1+ runs ``scripts/apply_finish.sh`` (pip +
+``post_update.sh`` + restart) in a detached session after git sync.
+Do not ``systemctl stop`` at the start of that script: it is spawned
+from the meshpoint service cgroup and would kill itself before pip
+finishes. Typical runtime is about 1–2 minutes (longer when
+``cryptography`` is first installed). The Updates page waits up to
+three minutes, then reloads when ``/api/identity`` responds again.
+Full ``install.sh`` is still recommended over SSH when release notes call
+for system packages or HAL work. If the dashboard still shows
+**Rollback**, that button resets git to the saved pre-update commit; use
+it only if you want to abandon the target branch.
+
+### Settings → Updates stuck on "Reconnecting" after apply
+
+**Cause:** On builds before the apply_finish cgroup fix, the script
+called ``systemctl stop`` while still running inside the meshpoint
+service unit. Systemd then killed the script before ``pip install`` and
+``systemctl restart`` could finish, leaving the service **inactive**
+while the browser kept polling.
+
+**Fix (recovery):**
+
+```bash
+sudo bash /opt/meshpoint/scripts/apply_finish.sh
+```
+
+Or manually:
+
+```bash
+sudo /opt/meshpoint/venv/bin/pip install -r /opt/meshpoint/requirements.txt
+sudo systemctl restart meshpoint
+```
+
+Then hard-refresh the dashboard (Ctrl+Shift+R).
+
+### `install.sh` told me to reboot after an upgrade. Do I have to?
+
+**Pre-v0.7.1 only.** The install.sh on v0.7.0 always printed the
+fresh-install banner, including "Reboot to apply SPI/UART changes" and
+"Run sudo meshpoint setup", even when you were just upgrading. The
+reboot is **not required** on an upgrade because SPI/UART/I2C are
+already configured from the original install, and the wizard step
+isn't needed because `local.yaml` already has your config.
+
+**Fix:** A simple `sudo systemctl restart meshpoint` is all you need
+after `sudo /opt/meshpoint/scripts/install.sh` completes. v0.7.1 and
+later detect the upgrade case automatically and print the right
+banner, so this only bites users running install.sh on v0.7.0 once.
+
+---
+
+## Install and pip
+
+### `error: externally-managed-environment`
+
+**Cause:** Raspberry Pi OS Bookworm and later use PEP 668 externally-managed
+environments. The system `pip` refuses to install packages to protect the
+OS Python.
+
+**Fix:** Always use the Meshpoint venv path:
+
+```bash
+sudo /opt/meshpoint/venv/bin/pip install -r /opt/meshpoint/requirements.txt
+```
+
+The full update path (recommended for mixed-version fleets) is:
+
+```bash
+cd /opt/meshpoint
+sudo git fetch origin
+sudo git checkout main
+sudo git pull origin main
+sudo bash scripts/install.sh
+sudo systemctl restart meshpoint
+```
+
+### `No module named 'src'`
+
+**Cause:** `/opt/meshpoint` is missing source files, or the service is
+running from the wrong working directory.
+
+**Fix:** Check that the source is intact:
+
+```bash
+ls /opt/meshpoint/src/main.py
+```
+
+If missing, re-clone (preserve your config and database first):
+
+```bash
+sudo cp -r /opt/meshpoint/data /tmp/meshpoint-data-backup
+sudo cp /opt/meshpoint/config/local.yaml /tmp/local-yaml-backup
+sudo rm -rf /opt/meshpoint
+sudo git clone https://github.com/KMX415/meshpoint.git /opt/meshpoint
+sudo cp -r /tmp/meshpoint-data-backup /opt/meshpoint/data/
+sudo cp /tmp/local-yaml-backup /opt/meshpoint/config/local.yaml
+sudo bash /opt/meshpoint/scripts/install.sh
+```
+
+### `No module named 'psutil'` (or `paho`, etc.)
+
+**Cause:** A required Python dependency is missing from the venv. Often
+happens after `git pull` brings in new code that depends on a newly-added
+package, but `pip install` was not re-run.
+
+**Fix:**
+
+```bash
+cd /opt/meshpoint
+sudo /opt/meshpoint/venv/bin/pip install -r requirements.txt
+sudo systemctl restart meshpoint
+```
+
+### `SyntaxError: source code string cannot contain null bytes` or `fatal: loose object is corrupt`
+
+**Cause:** SD card took a bad write, usually from a hard power cut.
+
+**Fix:** Clean re-clone preserving data and config. See
+[Troubleshooting > Recovering from a corrupted install](TROUBLESHOOTING.md#recovering-from-a-corrupted-install).
+
+---
+
+## Service and permissions
+
+### `Permission denied: /dev/spidev0.0`
+
+**Cause:** The `meshpoint` system user is not in the `spi` group.
+
+**Fix:**
+
+```bash
+sudo usermod -a -G spi meshpoint
+sudo systemctl restart meshpoint
+```
+
+### `no GPIO tool found (pinctrl or gpioset)`
+
+**Cause:** The concentrator reset script needs `pinctrl` (Pi OS Lite default)
+or `gpioset` (from `gpiod`) to toggle GPIO. Non-standard images may have
+neither.
+
+**Fix:**
+
+```bash
+sudo apt install -y gpiod
+sudo systemctl restart meshpoint
+```
+
+### `attempt to write a readonly database`
+
+**Cause:** SQLite file or its directory has wrong ownership / permissions
+after a re-clone or migration.
+
+**Fix:**
+
+```bash
+sudo chmod 777 /opt/meshpoint/data
+sudo chmod 666 /opt/meshpoint/data/*.db
+sudo systemctl restart meshpoint
+```
+
+---
+
+## Concentrator and radio
+
+### Repeated WARN: `RX CRC_BAD if=N sf11 bw=250 ...`
+
+**Cause:** A LoRa packet reached the concentrator demodulator but the CRC
+check failed. This is most often caused by two transmissions overlapping
+in time on the same IF chain (capture-effect failure), or by a very weak
+signal corrupted in transit. A few CRC_BAD packets per hour is normal in
+busy mesh areas; a sustained stream every few seconds suggests RF collision
+congestion or interference.
+
+**Diagnostic:** Set `MESHPOINT_DEBUG_RX=1` in the systemd unit
+(`Environment=MESHPOINT_DEBUG_RX=1`) and restart the service. Every
+successful RX will then log at INFO with the same fields, letting you
+compare healthy versus corrupted traffic side-by-side. Disable by removing
+the env var and restarting.
+
+**Fix:** Usually no action is needed. To reduce the CRC_BAD rate, move the
+antenna away from RF noise sources or run on a less-congested channel.
+The running `total CRC_BAD` counter in the warning resets on every service
+restart.
+
+### Repeated WARN: `RX NO_CRC if=N sf? bw=? ...` or `RX unknown status=0xNN ...`
+
+**Cause:** The chip received a packet but the LoRa header CRC bit was off
+(`NO_CRC`) or the chip returned a status code the wrapper does not
+recognize (`unknown status`). On a Meshtastic-configured concentrator
+(CRC always enabled in the outbound LoRa header by spec), `NO_CRC`
+typically indicates corrupted bytes at the noise floor. Pre-v0.7.3
+these flowed into the decoder and produced phantom node rows in the
+local SQLite (a one-packet entry with no name and no role, never heard
+again). v0.7.3 drops them at the wrapper with these counted WARNINGs.
+
+**Fix:** No action needed; the WARNINGs are diagnostic, not actionable.
+Counts running into the hundreds per hour suggest your antenna is sitting
+in a high-RF-noise environment; the same antenna placement guidance as
+for `CRC_BAD` applies. The counters reset on service restart.
+
+### Phantom nodes pre-v0.7.3 (`packet_count = 0`, no `long_name`)
+
+**Cause:** Meshpoints running v0.7.2 or earlier accepted `STAT_NO_CRC`
+packets from the concentrator and produced phantom node rows in the
+local `nodes` SQLite table. On low-traffic Meshpoints this typically
+adds tens to hundreds of phantoms over a week. On high-traffic
+Meshpoints it can grow into the tens of thousands and dominate the
+node table (one production v0.7.2 Meshpoint reached ~72k phantoms out
+of ~78k total nodes before the fix shipped).
+
+**Fix:** Update to v0.7.3 or later to stop the bleed. To clean out
+existing phantom rows accumulated under earlier versions, the safest
+filter waits 7 days (a real one-shot lurker would have either sent
+another packet by then or genuinely vanished, so deletion is safe):
+
+```bash
+sudo python3 -c "
+import sqlite3
+con = sqlite3.connect('/opt/meshpoint/data/concentrator.db')
+n = con.execute('''
+  DELETE FROM nodes
+  WHERE packet_count = 0
+    AND long_name IS NULL
+    AND julianday(last_heard) < julianday(\"now\", \"-7 days\")
+''').rowcount
+con.commit()
+print(f'Removed {n} stale phantom node row(s).')
+"
+sudo systemctl restart meshpoint
+```
+
+The cloud-side phantom rows in DynamoDB age out automatically via the
+30-day TTL once edge devices stop pushing them.
+
+### `Chip version 0x00`
+
+**Cause:** Concentrator is not responding on SPI. Either not seated, SPI
+disabled in `raspi-config`, or the SPI bus latched after a hard power cut.
+
+**Fix:**
+
+1. Confirm SPI is enabled: `sudo raspi-config` -> Interface Options -> SPI -> Enable.
+2. Confirm the concentrator module is firmly seated on the carrier board.
+3. Full power cycle: `sudo poweroff`, wait for green LED to stop, unplug for
+   10+ seconds, then plug back in.
+
+Normal chip versions are `0x10` (SX1302) and `0x12` (SX1303).
+
+### `lgw_start() failed` or `Failed to set SX1250_0 in STANDBY_RC mode`
+
+**Cause:** SPI bus latch from a hard power cut. The Meshpoint shutdown
+handler holds the concentrator in reset on `sudo reboot` and
+`sudo systemctl restart`, so this only appears after yanked-cable shutdowns,
+breaker trips, or outages.
+
+**Fix:** Full power cycle:
+
+```bash
+sudo poweroff
+```
+
+Wait for the green LED to stop blinking, then unplug for 10+ seconds and
+plug back in. See also [Troubleshooting > Concentrator fails to start](TROUBLESHOOTING.md#concentrator-fails-to-start).
+
+### `SX1302 concentrator started` but `0 pkt this cycle` continuously
+
+**Cause:** Two possible causes:
+
+1. No Meshtastic devices in range, or wrong region/frequency for your area.
+2. The SX1250 RF front-end was damaged by repeated hard power loss, even
+   though the digital SPI side recovered.
+
+**Fix:**
+
+1. Confirm there is a known-working Meshtastic device transmitting nearby
+   (within a few meters for the test).
+2. Check `meshpoint status` to confirm the configured region and frequency
+   match your area's mesh.
+3. If still zero packets with a known-working test device close by, the
+   RAK2287 module is likely damaged and needs replacement. The Pi and
+   carrier board are unaffected.
+
+### Configured custom frequency but hearing the public channel
+
+**Cause:** Wrong override syntax in `local.yaml`, or a stale process before
+restart.
+
+**Fix:** Confirm the `radio:` block in `local.yaml` uses the right keys (no
+typos, two-space indent, no tabs):
+
+```yaml
+radio:
+  region: "US"
+  frequency_mhz: 918.25
+  bandwidth_khz: 500.0
+  spreading_factor: 9
+  coding_rate: "4/5"
+```
+
+Restart and confirm the new config in the startup banner:
+
+```bash
+sudo systemctl restart meshpoint
+meshpoint logs | head -40
+```
+
+The startup banner prints the actual radio config, not just the region
+default. If it still shows LongFast defaults, your YAML did not parse.
+Validate with:
+
+```bash
+sudo /opt/meshpoint/venv/bin/python -c "import yaml; print(yaml.safe_load(open('/opt/meshpoint/config/local.yaml')))"
+```
+
+To clear stale node history after a frequency change:
+
+```bash
+sudo systemctl stop meshpoint
+sudo rm /opt/meshpoint/data/concentrator.db
+sudo systemctl start meshpoint
+```
+
+See [Radio Config Explained](RADIO-CONFIG-EXPLAINED.md) for the "why"
+behind each field.
+
+### `ERROR: wrong coding rate (0) - timestamp_counter_correction`
+
+**Cause:** This message is printed by `libloragw_sx1302.c` (Semtech's HAL),
+not by the Meshpoint service. The SX1302 has heard a LoRa preamble on the
+configured frequency where the explicit-header decode did not yield a
+recognised coding rate (1-4). Common sources:
+
+- Non-Meshtastic LoRa neighbours on the band (LoRaWAN gateways and
+  end-devices, weather stations, asset trackers). Most common in suburban
+  and urban deployments.
+- Implicit-header LoRa packets from devices using fixed payload formats.
+- CR_LI (long-interleaver) coding rates from newer SX126x devices that are
+  not in the SX1302 enum.
+- Weak or partially corrupted preambles where the header CRC fails but the
+  FPGA still emits a timing entry.
+
+It interleaves with normal service lines (`loop alive`, `heartbeat sent`,
+`lgw_receive`) because the HAL writes directly to stderr, which journalctl
+merges with the Python logger output.
+
+**Impact:** None. Valid Meshtastic packets with a proper LoRa header
+(CR 4/5 to 4/8) decode normally. This warning specifically means "saw
+something on air, could not classify it, moving on."
+
+**Fix:** None required. Safe to ignore.
+
+### My Short or Medium preset shows the wrong coding rate
+
+**Cause:** Meshpoints running v0.7.1 or earlier shipped the Short and
+Medium presets with `coding_rate: "4/8"` in the preset table. The
+correct value per the [Meshtastic spec](https://meshtastic.org/docs/overview/radio-settings/)
+is `4/5` for `ShortFast`, `ShortSlow`, `ShortTurbo`, `MediumFast`,
+`MediumSlow`, and `LongFast`. Only `LongModerate`, `LongSlow`,
+`LongTurbo`, and the deprecated `VeryLongSlow` use `4/8`.
+
+If you picked one of the affected presets in the dashboard Radio tab
+on a pre-fix install, your `config/local.yaml` has the wrong CR
+cached, even after `git pull`.
+
+**Impact:** RX is unaffected (the SX1302 decodes any CR automatically
+because the LoRa header carries it). TX takes roughly 60% more
+airtime than a stock Meshtastic node sending the "same" preset:
+4/8 has 2x overhead per data byte vs 4/5's 1.25x. NodeInfo broadcasts,
+DM ACKs, and relay (when enabled) all pay this airtime tax.
+
+**Fix:** After `sudo git pull origin main && sudo systemctl restart
+meshpoint`, do one of the following:
+
+- **Dashboard re-pick** (recommended): open the dashboard, go to the
+  Radio tab, re-select your preset from the Radio Configuration
+  dropdown, click Save Radio, and apply the restart prompt. This
+  rewrites `local.yaml` with the corrected CR.
+- **Manual edit**: edit `config/local.yaml` and set
+  `radio.coding_rate` to the correct value for your preset (`"4/5"`
+  for the six presets listed above, `"4/8"` for the four Long
+  presets). Then `sudo systemctl restart meshpoint`.
+
+To confirm the fix took effect, check the startup banner or
+`meshpoint status` for the active radio config, and watch the next
+NodeInfo broadcast log line: airtime should drop noticeably (e.g.,
+~723ms to ~456ms for a NodeInfo on MediumSlow).
+
+---
+
+## API and dashboard
+
+### `API: unreachable` in `meshpoint status`
+
+**Cause:** The service is running but the FastAPI server has not come up
+yet. Almost always because the concentrator failed to initialize, and the
+API waits for radio sync before binding.
+
+**Fix:** Read the logs to find the underlying concentrator error:
+
+```bash
+meshpoint logs | grep -iE "lgw|sx1302|concentrator|error"
+```
+
+Then apply the matching fix from the
+[Concentrator and radio](#concentrator-and-radio) section above.
+
+If you set up a Pi without the concentrator hardware to pre-stage the
+software, this is expected: the wizard will detect no concentrator and the
+API will stay unreachable until the real hardware is installed.
+
+### Dashboard does not load on `http://<pi-ip>:8080`
+
+**Cause:** Service not yet started, or `dashboard.host` was changed to
+`127.0.0.1` (local-only).
+
+**Fix:**
+
+```bash
+meshpoint status
+```
+
+Wait 60 seconds after power-on for the service to fully start. If status
+shows the service is running but the page does not load, check
+`dashboard.host` in `local.yaml`. The default `0.0.0.0` listens on all
+interfaces. `127.0.0.1` only allows access from the Pi itself.
+
+---
+
+## Authentication
+
+### Dashboard redirects to `/setup` after upgrade
+
+**Cause:** v0.7.3 added local dashboard authentication. Every Meshpoint
+upgrading from v0.7.2 or earlier hits `/setup` once on the first browser
+visit after the upgrade, where you set an admin password. This is
+expected and one-time per device.
+
+**Fix:** Set a password (8-character minimum, no charset complexity
+required, max 256) and continue. The password is bcrypt-hashed into
+`web_auth.admin_password_hash` in `local.yaml`; subsequent visits land
+on `/login`. Sessions last 24 hours by default
+(`web_auth.session_ttl_hours`).
+
+If you would rather not see the prompt today, downgrade to v0.7.2
+(`git checkout v0.7.2 && sudo /opt/meshpoint/scripts/install.sh`).
+Disabling auth in v0.7.3 is not supported on purpose: there is no
+read-only fallback for an unauthenticated dashboard.
+
+### Locked out after too many failed login attempts
+
+**Cause:** Five consecutive bad password attempts within five minutes
+(default `web_auth.lockout_attempts: 5`,
+`web_auth.lockout_cooldown_minutes: 5`) trip a per-username in-memory
+lockout. The login page shows a live countdown driven by the
+`Retry-After` header on the 429 response.
+
+**Fix:** Wait out the countdown (default 5 minutes) and try again.
+Restarting the service (`sudo systemctl restart meshpoint`) also clears
+the lockout because the tracker is in-memory only. If you genuinely
+forgot the password, use `meshpoint reset-password` instead of
+brute-forcing it.
+
+### Forgot the dashboard password (`meshpoint reset-password`)
+
+**Cause:** No password recovery email, no security questions: the
+admin password is stored only as a bcrypt hash and there is no way to
+read it back. v0.7.3 ships a host-level recovery CLI that you run from
+SSH.
+
+**Fix:** SSH into the Pi and run:
+
+```bash
+sudo meshpoint reset-password
+```
+
+The command prompts twice for the new password (8-character minimum),
+hashes it, rotates `web_auth.jwt_secret`, bumps
+`web_auth.session_version` (which invalidates every existing browser
+session), and writes everything to `local.yaml` atomically. No service
+restart required. Open `/login` and sign in with the new password.
+
+If you also lost SSH access, the only path forward is to re-image the
+SD card and re-run `meshpoint setup`. There is no way to recover an
+admin password without host-level access by design.
+
+### Setup wizard says "Existing config/local.yaml found" on a fresh SD
+
+**Cause:** Pre-v0.7.3 RC builds eagerly persisted the auto-generated
+`web_auth.jwt_secret` to `local.yaml` on first service start, before
+the user had set a password. The setup wizard then saw the file and
+warned about overwriting an "existing" config, even on a brand-new SD.
+
+**Fix:** Update to v0.7.3 (or any commit at or after the
+`fix(auth): defer jwt_secret persist to /setup` commit). The bootstrap
+now keeps the secret in memory until `/setup` actually completes;
+`local.yaml` stays absent on a fresh install. If you already have a
+polluted `local.yaml` from an RC build, delete it before re-running
+the wizard:
+
+```bash
+sudo systemctl stop meshpoint
+sudo rm -f /opt/meshpoint/config/local.yaml
+sudo systemctl start meshpoint
+sudo meshpoint setup
+```
+
+### `4401` close code on the WebSocket / dashboard kicked back to `/login`
+
+**Cause:** Your session cookie expired, was rotated by a
+`reset-password` run, or the JWT failed verification (algorithm pinned
+to HS256, signed with `web_auth.jwt_secret`). v0.7.3 maps WebSocket
+auth failures to close code 4401 and the dashboard's WS client
+auto-redirects to `/login?next=/`.
+
+**Fix:** Sign in again. If it happens repeatedly without an idle
+session in between, check `meshpoint logs | grep -i jwt` for clock
+skew or secret-rotation events. A common trigger is two browsers
+sharing a session where one ran `reset-password` -- expected behavior,
+the other browser will get bumped.
+
+---
+
+## MeshCore companion
+
+### Dashboard says not connected but MeshCore packets appear in logs
+
+**Cause:** `transmit.enabled` is `false` (the default in `config/default.yaml`).
+The dashboard reads MeshCore companion status from the Native TX path, not from
+the USB capture source. USB capture can still ingest MeshCore packets and show
+them in the packet feed while the Configuration and Radio companion cards report
+"not connected."
+
+**Fix:** If you want companion status, messaging, or Send Advert on the
+dashboard, enable Native TX under **Configuration → Transmit**, save, and
+restart the service:
+
+```yaml
+transmit:
+  enabled: true
+```
+
+If you only need passive USB capture (no dashboard MC controls), you can ignore
+the offline companion card. Confirm USB capture is working with:
+
+```bash
+meshpoint logs | grep -i meshcore
+```
+
+### MeshCore companion not receiving packets
+
+**Cause:** Wrong firmware, wrong port, wrong frequency, or the device
+was hot-plugged after the service started.
+
+**Fix:**
+
+1. Confirm the device is detected: `ls /dev/ttyUSB* /dev/ttyACM* 2>/dev/null`
+2. Confirm USB companion firmware (not BLE): re-flash from
+   [flasher.meshcore.co.uk](https://flasher.meshcore.co.uk/) and pick the
+   `companion_radio_usb` variant.
+3. Confirm region: `meshpoint meshcore-radio` to see the current setting,
+   or run `sudo meshpoint setup` to reconfigure end-to-end.
+4. Hot-plugged after service start? Unplug the device, wait 5 seconds,
+   plug back in. The service auto-reconnects.
+
+```bash
+meshpoint logs | grep -i meshcore
+```
+
+### MeshCore companion grabs the wrong serial port
+
+**Cause:** Multiple Espressif boards (Heltec, T-Beam) attached at the same
+time. Auto-detect cannot reliably pick the MeshCore one, especially with
+mixed Heltec V4 firmwares (see
+[Hardware Matrix > Heltec V3 vs V4 USB enumeration gotcha](HARDWARE-MATRIX.md#heltec-v3-vs-v4-usb-enumeration-gotcha)).
+
+**Fix:** Pin the port explicitly:
+
+```yaml
+capture:
+  meshcore_usb:
+    auto_detect: false
+    serial_port: "/dev/ttyACM0"
+```
+
+Then `sudo systemctl restart meshpoint`.
+
+### `MeshCore companion handshake failed` in the logs
+
+**Cause:** The `meshcore` library opened the serial port but did not get a
+`SELF_INFO` response back from the device within its 5-second handshake
+window. Four common reasons:
+
+1. **The companion just rebooted.** ESP32-S3 needs 6-10 seconds to be
+   USB-ready after a reboot, including the reboot the wizard triggers
+   when it applies a new region preset. The first handshake misses the
+   window. **In recent builds this self-heals:** the source schedules a
+   background reconnect with exponential backoff, so it will recover
+   on its own within 30-50 seconds. Look for `MeshCore USB initial
+   connect failed -- scheduling background reconnect` followed a few
+   seconds later by `MeshCore USB reconnected successfully`. If you do
+   not see those lines, run `cd /opt/meshpoint && sudo git pull origin
+   main && sudo systemctl restart meshpoint`.
+2. **Another process is holding the port.** An older wizard run, a stuck
+   `screen`/`minicom`, or a second copy of the service.
+3. **Wrong firmware variant.** The device is running BLE companion or the
+   Meshtastic firmware, not Companion USB. From the host you cannot tell
+   the difference at the USB layer; both enumerate the same way.
+4. **Incomplete firmware flash on Heltec V4 v4.2/v4.3.** See the next
+   entry.
+
+**Fix (if the source does not self-heal within a minute):**
+
+```bash
+sudo systemctl stop meshpoint
+sleep 5
+meshpoint meshcore-radio   # query and reconfigure
+sudo systemctl start meshpoint
+```
+
+If the CLI still reports "Could not read current radio settings",
+re-flash the device with Companion USB.
+
+### MeshCore reconnects every couple of minutes (health check failing)
+
+**Symptom:** The logs show a healthy initial connect, then every 2-3
+minutes a `MeshCore USB health check failed -- reconnecting` warning
+followed by a full reconnect cycle including a DTR pulse.
+
+**Cause:** A bug in Meshpoint, not in your companion. The old health
+check used `send_device_query` every 120 seconds and treated any
+non-immediate response as "connection dead". The underlying meshcore
+library's command timeout was 5 seconds, shorter than the wrapper
+thought, so a query that legitimately took >5s (because the device was
+mid-RX or mid-message-fetch) was misread as a hung connection.
+
+**Fix:** Pull the latest `main` (`cd /opt/meshpoint && sudo git pull
+origin main && sudo systemctl restart meshpoint`). The health check now
+passes a proper command timeout, skips the active probe when inbound
+events have arrived recently, and tolerates a single transient miss
+before reconnecting.
+
+### "Companion rejected name" / oversize name on rename (v0.7.5+)
+
+**Symptom:** Saving a new name on **Configuration → MeshCore → Companion
+name** fails with a toast like `Error: Name is 36 bytes (UTF-8);
+companion accepts at most 32.` or
+`Error: Companion rejected name: <reason>`.
+
+**Cause and fix:**
+
+- **`Name must not be empty`** -- whitespace-only or empty input. The
+  Meshpoint short-circuits before the companion is touched. Type a
+  real name.
+- **`Name is N bytes (UTF-8); companion accepts at most 32`** -- the
+  trimmed name exceeds the 32-byte cap. Note that 4-byte unicode
+  codepoints (some emoji) count as 4 bytes each: 9 of them blow
+  through the limit before the visible character count looks
+  unreasonable. Shorten the name or drop the emoji.
+- **`Companion rejected name: <detail>`** -- the rename actually
+  reached the device and the firmware refused it. Most often this is
+  a stricter local cap (some firmware variants enforce 28 bytes for
+  certain regions) or a transient flash-write failure. Try a shorter
+  name; if the same name was accepted on a different unit, retry
+  after a power cycle of the companion.
+
+The rename is atomic: a rejection means the on-device name is
+unchanged, and `local.yaml` is **not** updated. Your dashboard
+readout will still show the old name on the next refresh.
+
+### Dashboard still shows old companion name after a successful rename
+
+**Symptom:** Renaming the companion from **Configuration → MeshCore
+→ Companion name** appears to succeed (the Save button reports OK,
+neighbors see the new advert), but the dashboard input field and
+the Companion card readout keep showing the old name even after
+refreshing the page or restarting the service.
+
+**Affects:** Meshpoint v0.7.5 builds between commits `e082819` and
+`15bdc1d` (early ship of the rename feature). Fixed in the
+follow-up to this release.
+
+**Cause:** Early v0.7.5 builds tried to refresh the local
+`self_info` cache by calling a `send_appstart()` method that does
+not exist in `meshcore` 2.3.x. The rename itself wrote to flash
+correctly (this is why neighbors see the new advert and
+`local.yaml` shows `companion_name: <new>`), but the cache the
+dashboard reads from never got updated. Look for
+`AttributeError: 'MeshCore' object has no attribute 'send_appstart'`
+in `journalctl -u meshpoint`.
+
+**Fix:** Pull `main` (or the latest `feat/v0.7.5`) and restart the
+service:
+
+```bash
+cd /opt/meshpoint
+sudo git pull
+sudo systemctl restart meshpoint
+```
+
+The first reconnect after the restart reseeds `self_info` from the
+device's actual on-flash name, so the dashboard will catch up
+automatically. Subsequent renames update the cache directly with no
+library-method dependency.
+
+### Companion reverts to its old name on reboot
+
+**Symptom:** You renamed the companion from the dashboard, the rename
+worked (toast confirmed, neighbors saw the new advert), but a reboot
+or unplug/replug brings the old name back.
+
+**Cause:** Either you're on an older Meshpoint (pre-v0.7.5) where the
+rename only updated runtime state, or `local.yaml` is owned by a user
+the service can't write to (look for the WARN: `Renamed companion to
+'X' but failed to persist to local.yaml`).
+
+**Fix:**
+
+1. Confirm `meshcore.companion_name` shows up in `local.yaml`. If it
+   doesn't, the persistence write failed. Run
+   `sudo chown meshpoint:meshpoint /opt/meshpoint/config/local.yaml`
+   (or whichever user the systemd unit runs as) and re-save from the
+   dashboard.
+2. After saving, the next USB connect (whether from a service
+   restart, a Pi reboot, an unplug/replug, or even a swap to a fresh
+   companion) re-applies the configured name. You should see
+   `Re-applied companion_name='X' on connect` in the journal.
+3. If the WARN persists with `Failed to re-apply companion_name on
+   connect: <error>`, treat the error message the same way as the
+   in-dashboard rename failures above (shorter name, retry, etc.).
+
+### Heltec V4 v4.2/v4.3 fails to handshake even after a fresh flash
+
+**Cause:** The stock web flasher at
+[meshcore.io/flasher](https://flasher.meshcore.co.uk/) sometimes ships a
+non-merged image for the v4.2 and v4.3 hardware revisions of the Heltec
+WiFi LoRa 32 V4. The board enumerates over USB and accepts CLI commands
+once, but the next handshake attempt times out. From Meshpoint's side this
+shows up as the wizard succeeding the first time and then every subsequent
+`meshpoint meshcore-radio` failing with "Could not read current radio
+settings".
+
+**Fix:** Flash a known-good merged image for your specific board revision:
+
+1. Identify the revision printed on the silkscreen of your board (v4.1,
+   v4.2, v4.3).
+2. Download the matching merged image from
+   [mcimages.weebl.me](https://mcimages.weebl.me/) (community build,
+   provides per-revision merged binaries).
+3. Flash via `esptool.py` or your usual ESP32 flasher.
+4. Power-cycle the board and re-run `sudo meshpoint setup`.
+
+Stock builds from `meshcore.io` work fine on Heltec V3 and on Heltec V4
+v4.0/v4.1.
+
+---
+
+## Location and GPS
+
+### Configuration → GPS shows "no fix" with source set to gpsd
+
+**Cause:** The Meshpoint reached `gpsd` on `127.0.0.1:2947` but the
+daemon has no device attached, or the attached receiver hasn't
+acquired enough satellites for a 2D fix yet.
+
+**Fix:**
+
+1. Confirm `gpsd` is running and reachable:
+
+   ```bash
+   systemctl status gpsd.socket
+   gpsdctl get
+   cgps   # ctrl-C to exit; from gpsd-clients
+   ```
+
+2. If `gpsdctl get` returns no devices, plug a recognized USB GPS
+   receiver and wait 5–10 seconds for udev to call
+   `/lib/udev/rules.d/60-gpsd.rules`. `dmesg | tail` should show
+   `cdc_acm` enumerating `/dev/ttyACM0`.
+
+3. If a device is attached but `cgps` shows zero satellites, the
+   receiver still needs sky view. Cold-start time-to-first-fix on
+   u-blox 7 / 8 sticks is **30–90 seconds outdoors** and can be
+   indefinite indoors. The dashboard skyplot will show satellites
+   appearing one by one as the receiver tracks them; the fix-mode
+   lamp turns green when a 3D fix is achieved.
+
+4. If `gpsdctl get` shows the device but `gpsd` keeps logging
+   `device disconnected` / re-attach loops, the receiver is on
+   the wrong baud rate or the firmware is broken. Try a different
+   USB port, then a different cable, then a different stick.
+
+### `gpsd` not picking up my u-blox stick at all
+
+**Cause:** Either `gpsd` is not installed, or `USBAUTO="true"` is
+missing from `/etc/default/gpsd`. The Meshpoint installer adds
+both on every run as of v0.7.5+, so re-running it usually fixes
+this.
+
+**Fix:**
+
+```bash
+cd /opt/meshpoint
+sudo /opt/meshpoint/scripts/install.sh
+```
+
+Verify the configuration:
+
+```bash
+grep -E '^(START_DAEMON|USBAUTO|DEVICES|GPSD_OPTIONS)=' \
+    /etc/default/gpsd
+```
+
+You should see all four settings. If you customized
+`/etc/default/gpsd` by hand and the installer rewrote it, the
+desired settings (USB hotplug + no-wait mode) are now in place.
+Re-add any custom flags after the installer runs.
+
+### Live GPS skyplot works but Meshradar fleet pin does not move
+
+**Expected behavior (v0.7.6+).** Registered coordinates in
+`device.latitude/longitude` are the Meshradar fleet pin. Live gpsd
+fixes power the Configuration → GPS skyplot and optional mesh
+POSITION broadcasts, but they do **not** overwrite the registered
+pin or the upstream WebSocket registration payload.
+
+**To advertise live position on the Meshtastic app map:** open
+Configuration → GPS, set **Mesh position broadcasts** to **Live GPS**
+and pick **Approximate** or **Precise** privacy, then Save.
+
+**To move the Meshradar pin:** edit **Registered coordinates** on the
+same card (or `device:` in `local.yaml`) and Save.
+
+### gpsd enabled but skyplot still shows the static pin only
+
+**Cause:** `location.source` in `local.yaml` is still `static`
+(or unset, which defaults to static). The Meshpoint is not polling
+gpsd even though the daemon may be tracking satellites.
+
+**Fix:** Open Configuration → GPS and switch **Source** to **gpsd**,
+then click **Save** (service restart required). Or edit `local.yaml`:
+
+```yaml
+location:
+  source: "gpsd"
+```
+
+Restart the service. The skyplot and stats column update from the live
+fix once the receiver has a 2D fix or better. Registered coordinates
+in `device.*` stay unchanged unless you edit them explicitly.
+
+### MeshCore USB companion connection fails after plugging in a GPS
+
+**Cause:** Pre-v0.7.5 the MeshCore USB auto-detect path probed
+every `/dev/ttyACM*` looking for a companion handshake. u-blox
+GPS sticks (VID `0x1546`) hung the probe for ~5 s each before
+timing out, occasionally producing a `meshcore: no companion
+found` log line and delayed startup.
+
+**Fix:** Update to v0.7.5 or later. `UsbPortClassifier` now
+classifies u-blox VIDs as `gps_known` and the MeshCore detector
+skips them entirely. Plugging a GPS in alongside a Heltec V3 / V4
+companion is fully supported and the two devices co-exist.
+
+---
+
+## MQTT
+
+### MQTT enabled but no traffic on the broker, no MQTT lines in logs
+
+**Cause:** Three common cases. Diagnose by reading the logs right after
+restart:
+
+```bash
+sudo journalctl -u meshpoint --since "5 min ago" | grep -i mqtt
+```
+
+| Log line | Meaning | Fix |
+|---|---|---|
+| (no MQTT lines at all) | The `mqtt:` section did not parse | Check `local.yaml` indentation: two-space indent under `mqtt:`, no tabs. Did you put the block in `default.yaml` by mistake? |
+| `MQTT publishing disabled` | `enabled: true` was not set | Set `mqtt.enabled: true` in `local.yaml` |
+| `paho-mqtt not installed` | The MQTT library is not in the venv | `sudo /opt/meshpoint/venv/bin/pip install paho-mqtt && sudo systemctl restart meshpoint` |
+| `MQTT publisher failed to connect` | Broker / network issue at the MQTT protocol level | Check broker hostname, port, credentials. Note that `telnet broker 1883` succeeding does not guarantee the paho handshake works. |
+| `MQTT publisher started as !XXXXXXXX` | Working correctly | You should see `MQTT pub rc=0 topic=...` lines as packets arrive. If not, no packets are matching your `publish_channels` allowlist. |
+
+Most-common silent failure: missing `paho-mqtt` package after a `git pull`
+that did not re-run `pip install`. See [Configuration > MQTT](CONFIGURATION.md#mqtt-feed)
+for full configuration reference.
+
+### MQTT topics show `chXX` instead of `LongFast`
+
+**Cause:** Pre-v0.6.2 bug. The channel hash was used in the topic instead
+of the resolved channel name.
+
+**Fix:** Update to v0.6.2 or later. See
+[Changelog v0.6.2](CHANGELOG.md#v062-april-16-2026).
+
+---
+
+## Cloud (Meshradar)
+
+### Device not appearing on the cloud dashboard
+
+**Cause:** Upstream is disabled, API key is wrong, or the Pi has no internet.
+
+**Fix:**
+
+1. Confirm `upstream.enabled: true` in your `local.yaml` (or rely on the
+   default from `default.yaml`).
+2. Confirm the API key was saved by the setup wizard:
+   ```bash
+   sudo grep -A1 upstream /opt/meshpoint/config/local.yaml | grep auth_token
+   ```
+   It should be a non-null token. If it is `null`, re-run `sudo meshpoint setup`.
+3. Check internet: `ping -c3 meshradar.io`
+4. Read upstream logs:
+   ```bash
+   meshpoint logs | grep -i upstream
+   ```
+
+### `Upstream 401`
+
+**Cause:** Invalid API key.
+
+**Fix:** Generate a new key at [meshradar.io](https://meshradar.io) under
+**Account > API Keys** (the key is only shown once: copy it immediately).
+Then re-run `sudo meshpoint setup` and paste the new key.
+
+### Map dot turns red when the Pi is online
+
+**Cause:** Cloud uses a 15-minute heartbeat threshold. Cloud-side red does
+not mean the Pi is offline locally: it means the Pi has not sent a
+heartbeat in 15 minutes. Common causes: WiFi drops, NAT/firewall
+interference, ISP outages, or upstream WebSocket errors.
+
+**Fix:**
+
+1. Hardwire to Ethernet to rule out WiFi.
+2. Check upstream errors:
+   ```bash
+   sudo journalctl -u meshpoint --since "1 hour ago" | grep -i upstream
+   ```
+3. If the Pi reconnects on its own after the dot turns red, this is just a
+   transient blip and does not need action.
+
+### Two Meshpoints in the fleet after re-setup
+
+**Cause:** `sudo meshpoint setup` generated a fresh `device_id` for the new
+configuration, so the cloud sees it as a new device. Old `device_id` row
+remains until idle.
+
+**Fix:** Either wait 24 hours for the orphan to drop off the map, or
+hard-refresh the cloud dashboard, click the orphan card in **Fleet**, and
+use the **Remove** button.
+
+---
+
+## TX (Native messaging)
+
+### Messages sent from the dashboard are not received by other nodes
+
+**Cause:** Pre-v0.6.3 bug where the primary channel name defaulted to
+blank, producing channel hash `0x02` instead of `0x08`. All TX packets were
+invisible to the mesh.
+
+**Fix:** Update to v0.6.3 or later, then confirm the primary channel name
+is set to `LongFast` (or your network's primary channel name) on the Radio
+settings page. See [Changelog v0.6.3](CHANGELOG.md#v063-april-16-2026).
+
+### TX disabled
+
+**Cause:** TX is off by default.
+
+**Fix:** Enable on the **Radio** settings page in the local dashboard once
+RX is verified working. Confirm the antenna is connected before enabling
+TX. See [Configuration > Transmit](CONFIGURATION.md#transmit-native-messaging).
+
+### Received chat messages show the channel key as the sender
+
+**Cause:** Pre-v0.6.4 bug for Meshtastic broadcasts: the conversation key
+(`broadcast:meshtastic:0`) was rendered in the sender slot instead of the
+node name.
+
+**Fix:** Update to v0.6.4 or later. See [Changelog v0.6.4](CHANGELOG.md#v064-april-16-2026).
+
+---
+
+## Setup wizard
+
+### Wizard crashes with `PermissionError` on the final write step
+
+**Cause:** Wizard run without `sudo`, or run from a directory where the
+relative `config/local.yaml` path does not resolve.
+
+**Fix:** Always run the wizard with sudo:
+
+```bash
+sudo meshpoint setup
+```
+
+The wizard writes to `/opt/meshpoint/config/local.yaml`, owned by root.
+
+### Wizard says "Could not read current radio settings" and skips MeshCore
+
+**Cause:** The setup wizard could not get a `SELF_INFO` response from the
+MeshCore companion. Recent builds have the wizard pause
+`meshpoint.service` before opening the port, so the most common cause
+(port contention with the running service) is handled automatically. If
+you still see this message after `git pull`, the device is not
+responding to handshake at all.
+
+**Fix:**
+
+1. Confirm Companion USB firmware is on the device (BLE companion and
+   Meshtastic firmware will both fail this handshake).
+2. Confirm only one MeshCore device is plugged in. Multiple Espressif
+   boards confuse auto-detect.
+3. On Heltec V4 v4.2/v4.3, see "Heltec V4 v4.2/v4.3 fails to handshake
+   even after a fresh flash" above.
+4. Retry: `sudo meshpoint setup` and pick the right port at the
+   "Select MeshCore USB port" step. The wizard will skip MeshCore radio
+   configuration if the handshake still fails, but the rest of setup
+   completes normally and you can re-run `meshpoint meshcore-radio`
+   later.
+
+### Wizard cannot detect concentrator on a working RAK V2 / SenseCap M1
+
+**Cause:** SPI not enabled, or the concentrator is in a latched state from
+a previous hard power cut.
+
+**Fix:**
+
+1. `sudo raspi-config` -> Interface Options -> SPI -> Enable, then `sudo reboot`.
+2. After reboot, full power cycle: `sudo poweroff`, wait for green LED,
+   unplug 10+ seconds, plug back in.
+3. Re-run `sudo meshpoint setup`.
+
+---
+
+## WiFi and networking
+
+### Pi is rebooting on its own every ~12 minutes
+
+**Cause:** The network watchdog used to escalate to a full system reboot
+after 6 consecutive failed pings (about 12 minutes). On networks where
+the gateway blocks ICMP, this caused infinite reboot loops.
+
+**Fix:** Update to v0.6.5 or later:
+
+```bash
+cd /opt/meshpoint
+sudo git pull origin main
+sudo systemctl restart network-watchdog
+```
+
+v0.6.5 falls back to pinging `8.8.8.8` when the gateway does not reply,
+and disables auto-reboot by default. Stage 1 recovery (interface restart
+at 3 failures) is unchanged. See [Network Watchdog](NETWORK-WATCHDOG.md)
+for the full picture and how to re-enable auto-reboot if you want it.
+
+### `network-watchdog` service is `failed` or `inactive`
+
+**Cause:** The service unit was not installed, or the script was edited
+in a way that prevents it from starting.
+
+**Fix:**
+
+```bash
+sudo systemctl status network-watchdog
+sudo journalctl -u network-watchdog -n 50
+```
+
+If the unit file is missing entirely, re-run the installer:
+
+```bash
+sudo bash /opt/meshpoint/scripts/install.sh
+```
+
+The main meshpoint service does not depend on the watchdog. A failed
+watchdog will not affect packet capture or the dashboard, only WiFi
+auto-recovery.
+
+### WiFi keeps dropping and the watchdog cannot fix it
+
+**Cause:** Stage 1 recovery (`ip link set wlan0 down/up`) handles wedged
+drivers and lost associations, but cannot fix bad credentials, weak
+signal, or a router that is itself down.
+
+**Fix:**
+
+1. Confirm signal: `iwconfig wlan0` (look at `Link Quality` and `Signal level`).
+2. Confirm credentials: `sudo nmcli connection show` and inspect the
+   active profile. If the SSID password changed, update with
+   `sudo nmcli connection modify <name> wifi-sec.psk <new-pw>`.
+3. Move the Pi closer to the access point as a test.
+4. If the router itself is the problem, the watchdog cannot help. See
+   [Network Watchdog > When the watchdog will not help](NETWORK-WATCHDOG.md#when-the-watchdog-will-not-help).

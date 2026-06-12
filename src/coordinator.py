@@ -1,0 +1,508 @@
+from __future__ import annotations
+
+import asyncio
+import base64
+import binascii
+import logging
+from typing import Any, Callable, Optional
+
+from src.analytics.stats_reporter import StatsReporter
+from src.capture.capture_coordinator import CaptureCoordinator
+from src.config import AppConfig
+from src.decode.crypto_service import CryptoService
+from src.decode.packet_router import PacketRouter
+from src.hal.location import LocationSource, build_location_source
+from src.log_format import CYAN, DIM, GREEN, RESET
+from src.models.packet import Packet, Protocol, RawCapture
+from src.relay.meshtastic_transmitter import MeshtasticTransmitter
+from src.relay.mqtt_publisher import MqttPublisher
+from src.relay.relay_manager import RelayManager, build_relay_manager
+from src.storage.database import DatabaseManager
+from src.storage.node_repository import NodeRepository
+from src.storage.packet_repository import PacketRepository
+from src.storage.stray_frame_repository import StrayFrameRepository
+from src.storage.telemetry_repository import TelemetryRepository
+
+logger = logging.getLogger(__name__)
+
+_SOURCE_LABELS = {
+    "concentrator": "concentrator (8-ch SX1302)",
+    "serial": "serial radio",
+    "meshcore_usb": "MeshCore USB node",
+    "mock": "mock source",
+}
+
+
+class PipelineCoordinator:
+    """Wires the full capture -> decode -> store -> broadcast pipeline."""
+
+    def __init__(self, config: AppConfig):
+        self._config = config
+
+        self._db = DatabaseManager(config.storage.database_path)
+        self._crypto = CryptoService(config.meshtastic.default_key_b64)
+        self._router = PacketRouter(self._crypto)
+        self._capture = CaptureCoordinator()
+        radio = config.radio
+        self._relay = build_relay_manager(
+            config.relay,
+            region=radio.region,
+            default_sf=radio.spreading_factor,
+            default_bw_khz=radio.bandwidth_khz,
+            default_preamble=radio.preamble_length,
+        )
+        self._transmitter: Optional[MeshtasticTransmitter] = None
+        self._mqtt: Optional[MqttPublisher] = None
+        self._stats_reporter = StatsReporter()
+        self._location_source: LocationSource = build_location_source(
+            config.location, config.device
+        )
+
+        self._stray_repo = StrayFrameRepository(self._db)
+        self._node_repo: Optional[NodeRepository] = None
+        self._packet_repo: Optional[PacketRepository] = None
+        self._telemetry_repo: Optional[TelemetryRepository] = None
+
+        self._last_node_update: dict[str, Any] = {}
+        self._on_packet_callbacks: list[Callable[[Packet], None]] = []
+        self._on_location_callbacks: list[
+            Callable[[Optional[float], Optional[float], Optional[float]], None]
+        ] = []
+        self._running = False
+        self._pipeline_task: Optional[asyncio.Task] = None
+        self._cleanup_task: Optional[asyncio.Task] = None
+        self._location_refresh_task: Optional[asyncio.Task] = None
+        self._last_live_lat: Optional[float] = None
+        self._last_live_lon: Optional[float] = None
+        self._last_live_alt: Optional[float] = None
+
+    @property
+    def database(self) -> DatabaseManager:
+        return self._db
+
+    @property
+    def node_repo(self) -> NodeRepository:
+        if self._node_repo is None:
+            raise RuntimeError("Pipeline not started")
+        return self._node_repo
+
+    @property
+    def packet_repo(self) -> PacketRepository:
+        if self._packet_repo is None:
+            raise RuntimeError("Pipeline not started")
+        return self._packet_repo
+
+    @property
+    def telemetry_repo(self) -> TelemetryRepository:
+        if self._telemetry_repo is None:
+            raise RuntimeError("Pipeline not started")
+        return self._telemetry_repo
+
+    @property
+    def capture_coordinator(self) -> CaptureCoordinator:
+        return self._capture
+
+    @property
+    def stray_frame_repository(self) -> StrayFrameRepository:
+        return self._stray_repo
+
+    @property
+    def relay_manager(self) -> RelayManager:
+        return self._relay
+
+    @property
+    def stats_reporter(self) -> StatsReporter:
+        return self._stats_reporter
+
+    @property
+    def location_source(self) -> LocationSource:
+        """Live GPS source. Always present (defaults to ``StaticSource``)."""
+        return self._location_source
+
+    def on_packet(self, callback: Callable[[Packet], None]) -> None:
+        """Register a callback invoked for each decoded packet."""
+        self._on_packet_callbacks.append(callback)
+
+    def on_location_update(
+        self,
+        callback: Callable[[Optional[float], Optional[float], Optional[float]], None],
+    ) -> None:
+        """Register a callback fired when a live GPS source publishes a new fix.
+
+        ``device.{latitude,longitude,altitude}`` (the Meshradar pin) is never
+        mutated. Callbacks receive live fix coordinates only.
+        """
+        self._on_location_callbacks.append(callback)
+
+    async def start(self) -> None:
+        await self._db.connect()
+        self._node_repo = NodeRepository(self._db)
+        self._packet_repo = PacketRepository(self._db)
+        self._telemetry_repo = TelemetryRepository(self._db)
+
+        self._setup_channel_keys()
+        self._setup_relay_transmitter()
+        self._setup_mqtt()
+        self._setup_location_banner()
+        await self._location_source.start()
+        await self._capture.start()
+
+        self._running = True
+        self._pipeline_task = asyncio.create_task(
+            self._run_pipeline(), name="pipeline"
+        )
+        self._cleanup_task = asyncio.create_task(
+            self._cleanup_loop(), name="db-cleanup"
+        )
+        self._location_refresh_task = asyncio.create_task(
+            self._location_refresh_loop(), name="location-refresh"
+        )
+        registered = [src.name for src in self._capture._sources]
+        sources = ", ".join(
+            _SOURCE_LABELS.get(s, s) for s in registered
+        ) or "none"
+        logger.info(
+            f" {CYAN}--{RESET} {GREEN}PIPELINE{RESET}  started  "
+            f"{DIM}sources: {sources}{RESET}"
+        )
+
+    async def stop(self) -> None:
+        self._running = False
+        await self._capture.stop()
+        for task in (self._pipeline_task, self._cleanup_task, self._location_refresh_task):
+            if task:
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+        await self._location_source.stop()
+        if self._transmitter:
+            self._transmitter.disconnect()
+        if self._mqtt:
+            self._mqtt.disconnect()
+        await self._db.disconnect()
+        logger.info(
+            f" {CYAN}--{RESET} {DIM}PIPELINE{RESET}  stopped"
+        )
+
+    async def _cleanup_loop(self) -> None:
+        """Periodically prune old packets to keep the DB from growing unbounded."""
+        interval = self._config.storage.cleanup_interval_seconds
+        max_retained = self._config.storage.max_packets_retained
+        try:
+            while self._running:
+                await asyncio.sleep(interval)
+                removed = await self._packet_repo.cleanup_old(max_retained)
+                if removed:
+                    logger.info(
+                        f" {CYAN}--{RESET} {DIM}CLEANUP{RESET}  "
+                        f"pruned {removed} old packets  "
+                        f"{DIM}(max {max_retained}){RESET}"
+                    )
+                stray_cfg = self._config.stray_frames
+                if stray_cfg.enabled:
+                    stray_removed = await self._stray_repo.cleanup(
+                        stray_cfg.max_retained,
+                        stray_cfg.retention_hours,
+                    )
+                    if stray_removed:
+                        logger.info(
+                            f" {CYAN}--{RESET} {DIM}CLEANUP{RESET}  "
+                            f"pruned {stray_removed} stray RF rows"
+                        )
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            logger.exception("Cleanup loop error")
+
+    async def _location_refresh_loop(self) -> None:
+        """Periodically pull the latest fix from the active location source.
+
+        Live sources (gpsd/uart) notify listeners when the fix changes.
+        ``device.{latitude,longitude,altitude}`` stays the registered Meshradar
+        pin and is not overwritten here.
+        """
+        interval = max(1, self._config.location.update_interval_seconds)
+        try:
+            while self._running:
+                await asyncio.sleep(interval)
+                self._apply_latest_location_fix()
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            logger.exception("Location refresh loop error")
+
+    def _apply_latest_location_fix(self) -> None:
+        if self._location_source.source_name == "static":
+            return
+
+        status = self._location_source.get_status()
+        if not status.available or status.fix is None:
+            return
+        if not status.fix.has_position:
+            return
+
+        lat = status.fix.latitude
+        lon = status.fix.longitude
+        alt = status.fix.altitude_m
+
+        if (
+            self._last_live_lat == lat
+            and self._last_live_lon == lon
+            and self._last_live_alt == alt
+        ):
+            return
+
+        self._last_live_lat = lat
+        self._last_live_lon = lon
+        self._last_live_alt = alt
+
+        for cb in self._on_location_callbacks:
+            try:
+                cb(lat, lon, alt)
+            except Exception:
+                logger.exception("Location update callback failed")
+
+    async def _run_pipeline(self) -> None:
+        try:
+            async for raw_capture in self._capture.packets():
+                if not self._running:
+                    break
+                await self._process_capture(raw_capture)
+        except asyncio.CancelledError:
+            pass
+        except Exception:
+            logger.exception("Pipeline error")
+
+    async def _process_capture(self, raw: RawCapture) -> None:
+        if raw.capture_source == "meshcore_usb":
+            packet = self._adapt_meshcore_usb(raw)
+        else:
+            packet = self._router.decode(
+                raw.payload, signal=raw.signal, protocol_hint=raw.protocol_hint
+            )
+        if packet is None:
+            await self._maybe_log_stray_frame(raw)
+            return
+
+        packet.capture_source = raw.capture_source
+        await self._store_packet(packet)
+        self._notify_callbacks(packet)
+        await self._relay.process_packet(packet)
+        self._publish_mqtt(packet)
+        self._record_stats(packet)
+
+    async def _maybe_log_stray_frame(self, raw: RawCapture) -> None:
+        stray_cfg = self._config.stray_frames
+        if not stray_cfg.enabled:
+            return
+        try:
+            await self._stray_repo.insert_from_capture(raw)
+            await self._stray_repo.cleanup(
+                stray_cfg.max_retained,
+                stray_cfg.retention_hours,
+            )
+        except Exception:
+            logger.exception("Failed to persist stray RF frame")
+
+    @staticmethod
+    def _adapt_meshcore_usb(raw: RawCapture) -> Optional[Packet]:
+        from src.decode.meshcore_event_adapter import adapt_event
+        return adapt_event(raw.payload, signal=raw.signal)
+
+    async def _store_packet(self, packet: Packet) -> None:
+        try:
+            await self._packet_repo.insert(packet)
+            await self._update_node(packet)
+            await self._store_telemetry(packet)
+        except Exception:
+            logger.exception("Failed to store packet %s", packet.packet_id)
+
+    async def _update_node(self, packet: Packet) -> None:
+        decoder = (
+            self._router.meshtastic_decoder
+            if packet.protocol == Protocol.MESHTASTIC
+            else self._router.meshcore_decoder
+        )
+        node_update = decoder.extract_node_update(packet)
+        if node_update:
+            await self._node_repo.upsert(node_update)
+            self._last_node_update[node_update.node_id] = node_update
+            self._stats_reporter.record_node(node_update.to_dict())
+            if node_update.public_key:
+                try:
+                    node_int = int(node_update.node_id, 16)
+                    new_key = bytes.fromhex(node_update.public_key)
+                    prior = self._crypto.lookup_public_key(node_int)
+                    self._crypto.register_public_key(node_int, new_key)
+                    if prior != new_key:
+                        logger.info(
+                            "Updated peer PKI public_key for %s",
+                            node_update.node_id,
+                        )
+                except ValueError:
+                    logger.debug(
+                        "Ignoring invalid public_key for node %s",
+                        node_update.node_id,
+                    )
+        elif packet.source_id:
+            await self._node_repo.increment_packet_count(packet.source_id)
+
+    async def _store_telemetry(self, packet: Packet) -> None:
+        decoder = (
+            self._router.meshtastic_decoder
+            if packet.protocol == Protocol.MESHTASTIC
+            else self._router.meshcore_decoder
+        )
+        telemetry = decoder.extract_telemetry(packet)
+        if telemetry:
+            await self._telemetry_repo.insert(telemetry)
+
+    def _record_stats(self, packet: Packet) -> None:
+        """Feed the StatsReporter with packet metrics for heartbeat reporting."""
+        rssi = packet.signal.rssi if packet.signal else None
+        snr = packet.signal.snr if packet.signal else None
+        self._stats_reporter.record_packet(
+            protocol=packet.protocol.value,
+            packet_type=packet.packet_type.value,
+            rssi=rssi,
+            snr=snr,
+            hop_start=packet.hop_start,
+            hop_limit=packet.hop_limit,
+        )
+
+        if (
+            packet.signal
+            and packet.source_id
+            and self._config.device.latitude is not None
+            and self._config.device.longitude is not None
+        ):
+            node = self._last_node_update.get(packet.source_id)
+            if node and node.has_position:
+                self._stats_reporter.record_farthest_direct(
+                    source_id=packet.source_id,
+                    rssi=rssi,
+                    device_lat=self._config.device.latitude,
+                    device_lon=self._config.device.longitude,
+                    node_lat=node.latitude,
+                    node_lon=node.longitude,
+                    hop_start=packet.hop_start,
+                    hop_limit=packet.hop_limit,
+                )
+
+    def _notify_callbacks(self, packet: Packet) -> None:
+        for callback in self._on_packet_callbacks:
+            try:
+                callback(packet)
+            except Exception:
+                logger.exception("Packet callback error")
+
+    def _setup_relay_transmitter(self) -> None:
+        if not self._config.relay.enabled:
+            logger.info(
+                f" {CYAN}--{RESET} {DIM}RELAY{RESET}    disabled"
+            )
+            return
+
+        # Native onboard relay (preferred, identity-preserving) is
+        # wired later in src/api/server.py once tx_service is built.
+        # That registration replaces whatever this method binds, so
+        # we only spin up the legacy USB-companion transmitter when
+        # the user has explicitly configured ``relay.serial_port``
+        # AND has not enabled native transmit.
+        native_available = self._config.transmit.enabled
+        legacy_configured = bool(self._config.relay.serial_port)
+
+        if native_available:
+            logger.info(
+                f" {CYAN}--{RESET} {GREEN}RELAY{RESET}    "
+                f"native onboard SX1302  "
+                f"{DIM}max {self._config.relay.max_relay_per_minute}/min{RESET}"
+            )
+            return
+
+        if not legacy_configured:
+            logger.warning(
+                "Relay enabled but no transmit backend available. "
+                "Either set transmit.enabled=true to use the onboard "
+                "SX1302 (preferred), or set relay.serial_port to a "
+                "USB-attached Meshtastic radio."
+            )
+            return
+
+        logger.warning(
+            "Relay TX is using the LEGACY USB-companion path "
+            "(transmit.enabled=false). The onboard SX1302 path is "
+            "preferred: enable transmit in config/local.yaml to "
+            "activate identity-preserving relay through the same "
+            "radio that handles outbound messaging."
+        )
+
+        self._transmitter = MeshtasticTransmitter(self._config.relay)
+        self._transmitter.connect()
+        self._relay.set_transmit_function(self._transmitter.transmit)
+        logger.info(
+            f" {CYAN}--{RESET} {GREEN}RELAY{RESET}    "
+            f"USB-companion ready  "
+            f"{DIM}max {self._config.relay.max_relay_per_minute}/min{RESET}"
+        )
+
+    def _setup_mqtt(self) -> None:
+        if not self._config.mqtt.enabled:
+            logger.info(
+                f" {CYAN}--{RESET} {DIM}MQTT{RESET}     disabled"
+            )
+            return
+        try:
+            device_name = self._config.device.device_name
+            self._mqtt = MqttPublisher(
+                self._config.mqtt,
+                device_name,
+                channel_keys=self._config.meshtastic.channel_keys or None,
+            )
+            if self._mqtt.connect():
+                logger.info(
+                    f" {CYAN}--{RESET} {GREEN}MQTT{RESET}     "
+                    f"publisher started as {self._mqtt.gateway_id}"
+                )
+            else:
+                logger.warning("MQTT publisher failed to connect, continuing without MQTT")
+                self._mqtt = None
+        except Exception:
+            logger.exception("MQTT setup failed, continuing without MQTT")
+            self._mqtt = None
+
+    def _publish_mqtt(self, packet: Packet) -> None:
+        if not self._mqtt:
+            return
+        try:
+            self._mqtt.publish(packet)
+        except Exception:
+            logger.exception("MQTT publish error for packet %s", packet.packet_id)
+
+    def _setup_channel_keys(self) -> None:
+        for name, key in self._config.meshtastic.channel_keys.items():
+            self._crypto.add_channel_key(name, key)
+        for name, key in self._config.meshcore.channel_keys.items():
+            key_b64 = base64.b64encode(binascii.unhexlify(key)).decode()
+            self._crypto.add_channel_key(name, key_b64)
+
+    def _setup_location_banner(self) -> None:
+        """One-line startup banner matching the RELAY/MQTT/PIPELINE rows."""
+        source_name = self._location_source.source_name
+        if source_name == "gpsd":
+            host = self._config.location.gpsd_host
+            port = self._config.location.gpsd_port
+            detail = f"gpsd @ {host}:{port}"
+            color = GREEN
+        elif source_name == "uart":
+            loc = self._config.location
+            detail = f"UART NMEA @ {loc.uart_path}"
+            color = GREEN
+        else:
+            detail = "static config coordinates"
+            color = DIM
+        logger.info(
+            f" {CYAN}--{RESET} {color}LOCATION{RESET} {detail}"
+        )

@@ -1,0 +1,599 @@
+from __future__ import annotations
+
+import dataclasses
+import logging
+import os
+import sys
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Optional
+
+import yaml
+
+from src.version import __version__
+
+logger = logging.getLogger(__name__)
+
+
+# Band-start frequencies (MHz) for the Meshtastic slot formula
+# freq = freqStart + BW/2000 + (slot-1) * BW/1000
+# Values match _REGION_BAND_LIMITS_HZ in hal/concentrator_config.py.
+_REGION_FREQ_START: dict[str, float] = {
+    "US":     902.0,
+    "EU_868": 863.0,
+    "ANZ":    915.0,
+    "IN":     865.0,
+    "KR":     920.0,
+    "SG_923": 917.0,
+}
+
+# Regional default frequencies used when neither frequency_mhz nor slot
+# is set. Values match REGION_DEFAULTS in radio/presets.py.
+_REGION_DEFAULT_FREQ: dict[str, float] = {
+    "US":     906.875,
+    "EU_868": 869.525,
+    "ANZ":    916.0,
+    "IN":     865.4625,
+    "KR":     921.9,
+    "SG_923": 923.0,
+}
+
+
+@dataclass
+class RadioConfig:
+    region: str = "US"
+    frequency_mhz: Optional[float] = None  # resolved at load time; wins over slot
+    slot: Optional[int] = None             # Meshtastic 1-indexed slot; used when frequency_mhz absent
+    spreading_factor: int = 11
+    bandwidth_khz: float = 250.0
+    coding_rate: str = "4/5"
+    sync_word: int = 0x2B
+    preamble_length: int = 16
+    tx_power_dbm: int = 22
+    # Periodic SX1302 spectral scan to measure ambient noise floor
+    # directly. Each scan briefly pauses RX on the primary channel
+    # (~50 ms). Default 60 s gives ~0.08% downtime; raise for less.
+    # Set to 0 to disable (falls back to packet-derived noise floor).
+    spectral_scan_interval_seconds: float = 60.0
+    # SPI device for the SX1261 companion radio used by spectral
+    # scan. Empty string disables the SX1261 init step entirely
+    # (default; spectral scan stays unavailable, packet-derived
+    # noise floor remains in use).
+    #
+    # On RAK2287 / RAK5146 / SenseCap M1 this is typically
+    # ``/dev/spidev0.1`` (separate from the SX1302's
+    # ``/dev/spidev0.0``). Some carriers daisy-chain the SX1261
+    # behind the SX1302's SPI router and want this set to the same
+    # path as the SX1302 SPI device. Wrong path = HAL refuses to
+    # ``lgw_start`` after our config attempt, so we ship empty by
+    # default and ask interested users to opt in explicitly.
+    sx1261_spi_path: str = ""
+
+
+@dataclass
+class MeshtasticConfig:
+    default_key_b64: str = "AQ=="
+    primary_channel_name: str = "LongFast"
+    channel_keys: dict[str, str] = field(default_factory=dict)
+    # Optional ADMIN channel key for remote node config read/write (PR 15–16).
+    admin_key_b64: str = ""
+    admin_channel_name: str = "admin"
+
+
+@dataclass
+class MeshcoreConfig:
+    default_key_b64: str = ""
+    channel_keys: dict[str, str] = field(default_factory=dict)
+    # Desired companion advert name. When set, the dashboard rename
+    # path writes here, and the USB capture source re-applies it on
+    # every connect via MeshCoreTxClient.set_companion_name. Leaving
+    # this empty means "trust whatever name is on the companion's
+    # flash" -- the v0.7.4 behavior.
+    companion_name: Optional[str] = None
+
+
+@dataclass
+class MeshcoreUsbConfig:
+    """MeshCore USB node monitoring -- auto-detected at startup when enabled."""
+
+    serial_port: Optional[str] = None
+    baud_rate: int = 115200
+    auto_detect: bool = True
+
+
+@dataclass
+class CaptureConfig:
+    sources: list[str] = field(default_factory=lambda: ["mock"])
+    serial_port: Optional[str] = None
+    serial_baud: int = 115200
+    concentrator_spi_device: str = "/dev/spidev0.0"
+    meshcore_usb: MeshcoreUsbConfig = field(default_factory=MeshcoreUsbConfig)
+
+
+@dataclass
+class StorageConfig:
+    database_path: str = "data/concentrator.db"
+    max_packets_retained: int = 100_000
+    cleanup_interval_seconds: int = 3600
+
+
+@dataclass
+class DashboardConfig:
+    host: str = "0.0.0.0"  # nosec B104 -- intentional for local device dashboard
+    port: int = 8080
+    static_dir: str = "frontend"
+
+
+@dataclass
+class UpstreamConfig:
+    enabled: bool = False
+    url: str = "wss://api.meshradar.io"
+    reconnect_interval_seconds: int = 10
+    buffer_max_size: int = 5000
+    auth_token: Optional[str] = None
+
+
+@dataclass
+class DeviceConfig:
+    device_id: Optional[str] = None
+    device_name: str = "Meshpoint"
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+    altitude: Optional[float] = None
+    hardware_description: str = "RAK2287 + Raspberry Pi 4"
+    firmware_version: str = __version__
+
+
+@dataclass
+class StormGuardConfig:
+    """In-memory storm/replay quarantine (relay-only, not persisted to SQLite)."""
+
+    enabled: bool = False
+    window_seconds: int = 60
+    identical_packet_threshold: int = 5
+    rate_threshold_per_minute: int = 30
+    quarantine_duration_seconds: int = 300
+    notify_dashboard: bool = True
+
+
+@dataclass
+class RelayConfig:
+    enabled: bool = False
+    serial_port: Optional[str] = None
+    serial_baud: int = 115200
+    max_relay_per_minute: int = 20
+    burst_size: int = 5
+    min_relay_rssi: float = -110.0
+    max_relay_rssi: float = -50.0
+    blocklist: list[str] = field(default_factory=list)
+    priority_list: list[str] = field(default_factory=list)
+    dedup_ttl_seconds: int = 300
+    channel_throttle_percent: dict[str, float] = field(default_factory=dict)
+    storm_guard: StormGuardConfig = field(default_factory=StormGuardConfig)
+
+
+@dataclass
+class TelemetryConfig:
+    """Periodic device_metrics telemetry broadcast settings."""
+
+    interval_minutes: int = 30
+    startup_delay_seconds: int = 120
+
+
+@dataclass
+class PositionConfig:
+    """Periodic POSITION broadcast settings."""
+
+    interval_minutes: int = 15
+    startup_delay_seconds: int = 180
+    # Coordinates sent on the public LoRa mesh (Meshtastic POSITION packets).
+    # ``static`` uses ``device.{latitude,longitude,altitude}`` (wizard pin).
+    # ``live`` reads the active ``LocationSource`` (gpsd/uart) when a fix exists.
+    coordinate_source: str = "static"
+    # Privacy when ``coordinate_source`` is ``live``: exact, approximate
+    # (~1.1 km rounding), or none (skip position on mesh). Ignored for static.
+    location_precision: str = "approximate"
+
+
+@dataclass
+class MqttConfig:
+    enabled: bool = False
+    broker: str = "mqtt.meshtastic.org"
+    port: int = 1883
+    username: str = "meshdev"
+    password: str = "large4cats"
+    topic_root: str = "msh"
+    region: str = "US"
+    tls_enabled: bool = False
+    tls_ca_cert: str = ""
+    # Optional ``!xxxxxxxx`` override; blank uses MD5 hash of device name.
+    gateway_id: Optional[str] = None
+    publish_channels: list[str] = field(default_factory=lambda: ["LongFast", "MeshCore"])
+    publish_json: bool = False
+    location_precision: str = "exact"
+    homeassistant_discovery: bool = False
+
+
+@dataclass
+class NodeInfoConfig:
+    """Periodic NodeInfo broadcast settings.
+
+    Identity (long_name, short_name, hw_model) is broadcast on the
+    primary channel so receiving Meshtastic clients build a stable
+    contact entry.
+
+    Set ``interval_minutes`` to ``0`` to disable periodic broadcasts
+    while keeping TX enabled (DMs and replies still work). Otherwise
+    valid range is 5..1440 (5 min to 24 hr).
+    """
+
+    interval_minutes: int = 180
+    startup_delay_seconds: int = 60
+
+
+@dataclass
+class TransmitConfig:
+    """Native LoRa transmission settings.
+
+    When enabled, the Meshpoint can send Meshtastic messages through
+    the onboard SX1261 radio and MeshCore messages through the USB
+    companion. Disabled by default: opt-in via local.yaml.
+    """
+
+    enabled: bool = False
+    node_id: Optional[int] = None
+    tx_power_dbm: int = 14
+    # None = auto-derive from radio.region (10% US/ANZ/KR/SG_923,
+    # 1% EU_868/IN). Set explicitly in local.yaml to override.
+    max_duty_cycle_percent: Optional[float] = None
+    long_name: str = "Meshpoint"
+    short_name: str = "MPNT"
+    hop_limit: int = 3
+    nodeinfo: NodeInfoConfig = field(default_factory=NodeInfoConfig)
+    telemetry: TelemetryConfig = field(default_factory=TelemetryConfig)
+    position: PositionConfig = field(default_factory=PositionConfig)
+
+
+@dataclass
+class LocationConfig:
+    """Where the Meshpoint's reported lat/lon/alt comes from.
+
+    ``source`` values:
+        - ``"static"``   : use ``device.latitude/longitude/altitude`` from
+                           ``local.yaml``. Backward-compatible default.
+        - ``"gpsd"``     : connect to a local or remote ``gpsd`` daemon for
+                           live fixes (skyplot, optional mesh POSITION).
+                           Does not change ``device.{lat,lon,alt}`` (Meshradar
+                           pin). Auto-installed by ``scripts/install.sh``.
+        - ``"uart"``     : direct on-board UART NMEA (RAK Pi HAT GPS via
+                           ``uart_path`` / ``uart_baud``).
+
+    ``gpsd_host`` / ``gpsd_port`` default to gpsd's well-known
+    localhost socket. Override only when running gpsd on a peer
+    device on the LAN.
+
+    ``update_interval_seconds`` is the period the coordinator wakes up
+    to poll the active source. Static is effectively idle. gpsd reads
+    the latest TPV report each cycle (the daemon batches device data
+    on its side, so this is cheap).
+
+    ``min_fix_quality`` filters noisy fixes: ``0`` accepts anything
+    gpsd publishes (including no-fix), ``1`` requires a 2D fix, ``2``
+    requires a 3D fix. Default is ``1`` so the dashboard never moves
+    based on a no-fix TPV.
+    """
+
+    source: str = "static"
+    gpsd_host: str = "127.0.0.1"
+    gpsd_port: int = 2947
+    update_interval_seconds: int = 5
+    min_fix_quality: int = 1
+    uart_path: str = "/dev/ttyAMA0"
+    uart_baud: int = 9600
+
+
+@dataclass
+class MetricsConfig:
+    """Prometheus scrape endpoint at ``GET /metrics``."""
+
+    enabled: bool = False
+    require_auth: bool = True
+
+
+@dataclass
+class WebhookRuleConfig:
+    name: str = ""
+    event: str = ""
+    url: str = ""
+    enabled: bool = True
+    cooldown_seconds: float = 60.0
+    keyword: str = ""
+    battery_threshold_percent: int = 20
+    duty_threshold_percent: float = 80.0
+
+
+@dataclass
+class WebhookConfig:
+    enabled: bool = False
+    rules: list[WebhookRuleConfig] = field(default_factory=list)
+
+
+@dataclass
+class AutomationConfig:
+    """LAN automation API (Home Assistant / Node-RED). Disabled by default."""
+
+    enabled: bool = False
+    token: str = ""
+
+
+@dataclass
+class StrayFramesConfig:
+    """Retention for undecodable RF frames logged to SQLite."""
+
+    enabled: bool = True
+    max_retained: int = 5000
+    retention_hours: float = 168.0
+
+
+@dataclass
+class WebAuthConfig:
+    """Local dashboard authentication settings.
+
+    First-run state is ``admin_password_hash == ""``: the dashboard
+    forces the user through the ``/setup`` flow before any other page
+    or API call resolves. Once a hash is written, the dashboard
+    requires a valid session cookie (or ``Authorization: Bearer``)
+    on every protected endpoint.
+
+    ``jwt_secret`` is auto-generated on first run when empty and
+    persisted to ``local.yaml``. Rotating it (via the
+    ``meshpoint reset-password`` CLI) invalidates every existing
+    session in one move. ``session_version`` is embedded in the JWT
+    claim for finer-grained invalidation without rotating the secret.
+    """
+
+    admin_password_hash: str = ""
+    viewer_password_hash: str = ""
+    jwt_secret: str = ""
+    # Session lifetime in minutes. v0.7.4 raised the default from 60 to
+    # 480 (8 hours) after operators reported being kicked back to /login
+    # mid-shift. Configurable from Settings -> Auth -> Session lifetime,
+    # range-checked at the route layer (5 min .. 30 days).
+    jwt_expiry_minutes: int = 480
+    allow_read_only: bool = False
+    lockout_attempts: int = 5
+    lockout_cooldown_minutes: int = 5
+    session_version: int = 1
+
+
+@dataclass
+class AppConfig:
+    radio: RadioConfig = field(default_factory=RadioConfig)
+    meshtastic: MeshtasticConfig = field(default_factory=MeshtasticConfig)
+    meshcore: MeshcoreConfig = field(default_factory=MeshcoreConfig)
+    capture: CaptureConfig = field(default_factory=CaptureConfig)
+    storage: StorageConfig = field(default_factory=StorageConfig)
+    dashboard: DashboardConfig = field(default_factory=DashboardConfig)
+    upstream: UpstreamConfig = field(default_factory=UpstreamConfig)
+    device: DeviceConfig = field(default_factory=DeviceConfig)
+    relay: RelayConfig = field(default_factory=RelayConfig)
+    mqtt: MqttConfig = field(default_factory=MqttConfig)
+    transmit: TransmitConfig = field(default_factory=TransmitConfig)
+    web_auth: WebAuthConfig = field(default_factory=WebAuthConfig)
+    location: LocationConfig = field(default_factory=LocationConfig)
+    metrics: MetricsConfig = field(default_factory=MetricsConfig)
+    webhooks: WebhookConfig = field(default_factory=WebhookConfig)
+    automation: AutomationConfig = field(default_factory=AutomationConfig)
+    stray_frames: StrayFramesConfig = field(default_factory=StrayFramesConfig)
+
+
+def _resolve_radio_frequency(radio: "RadioConfig") -> None:
+    """Resolve radio.frequency_mhz at startup.
+
+    Priority (first match wins):
+    1. frequency_mhz set in YAML  -> use as-is, slot ignored
+    2. slot set in YAML           -> compute from slot + bandwidth + region
+    3. neither set                -> regional default frequency
+    """
+    if radio.frequency_mhz is not None:
+        return
+    if radio.slot is not None:
+        freq_start = _REGION_FREQ_START.get(radio.region)
+        if freq_start is not None:
+            spacing = radio.bandwidth_khz / 1000
+            radio.frequency_mhz = round(
+                freq_start + spacing / 2 + (radio.slot - 1) * spacing, 4
+            )
+            return
+    radio.frequency_mhz = _REGION_DEFAULT_FREQ.get(radio.region, 906.875)
+
+
+def _merge_dataclass(instance, overrides: dict):
+    """Apply dict overrides onto a dataclass instance, merging nested dataclasses."""
+    if not overrides:
+        return
+    for key, value in overrides.items():
+        if not hasattr(instance, key):
+            continue
+        current = getattr(instance, key)
+        if dataclasses.is_dataclass(current) and isinstance(value, dict):
+            _merge_dataclass(current, value)
+        else:
+            setattr(instance, key, value)
+
+
+def _collect_unknown_keys(instance, overrides: dict, prefix: str = "") -> list[str]:
+    """Return dotted paths of override keys with no matching dataclass field.
+
+    Mirrors the descent rules in :func:`_merge_dataclass`: it only recurses
+    into a nested dataclass (e.g. ``transmit.nodeinfo``), so user-supplied
+    mapping fields such as ``meshtastic.channel_keys`` are treated as opaque
+    values rather than scanned for "unknown" keys.
+    """
+    unknown: list[str] = []
+    for key, value in overrides.items():
+        if not hasattr(instance, key):
+            unknown.append(f"{prefix}{key}")
+            continue
+        current = getattr(instance, key)
+        if dataclasses.is_dataclass(current) and isinstance(value, dict):
+            unknown.extend(_collect_unknown_keys(current, value, f"{prefix}{key}."))
+    return unknown
+
+
+def _apply_yaml(cfg: AppConfig, path: Path) -> None:
+    """Merge a single YAML file into an existing AppConfig."""
+    if not path.exists():
+        return
+
+    with open(path, "r") as fh:
+        raw = yaml.safe_load(fh) or {}
+
+    if not isinstance(raw, dict):
+        logger.warning("Ignoring %s: top-level YAML is not a mapping.", path)
+        return
+
+    section_map = {
+        "radio": cfg.radio,
+        "meshtastic": cfg.meshtastic,
+        "meshcore": cfg.meshcore,
+        "capture": cfg.capture,
+        "storage": cfg.storage,
+        "dashboard": cfg.dashboard,
+        "upstream": cfg.upstream,
+        "device": cfg.device,
+        "relay": cfg.relay,
+        "mqtt": cfg.mqtt,
+        "transmit": cfg.transmit,
+        "web_auth": cfg.web_auth,
+        "location": cfg.location,
+        "metrics": cfg.metrics,
+        "webhooks": cfg.webhooks,
+        "automation": cfg.automation,
+        "stray_frames": cfg.stray_frames,
+    }
+
+    unknown_keys: list[str] = []
+    for section_name, section_value in raw.items():
+        section_instance = section_map.get(section_name)
+        if section_instance is None:
+            unknown_keys.append(section_name)
+            continue
+        _merge_dataclass(section_instance, section_value)
+        if isinstance(section_value, dict):
+            unknown_keys.extend(
+                _collect_unknown_keys(section_instance, section_value, f"{section_name}.")
+            )
+
+    _coerce_webhook_rules(cfg.webhooks)
+
+    if unknown_keys:
+        logger.warning(
+            "Ignoring %d unknown config key(s) in %s: %s. "
+            "These were not applied -- check for typos against the documented schema.",
+            len(unknown_keys),
+            path,
+            ", ".join(sorted(unknown_keys)),
+        )
+
+
+def _coerce_webhook_rules(webhooks: WebhookConfig) -> None:
+    """Turn YAML rule dicts into ``WebhookRuleConfig`` instances."""
+    if not webhooks.rules:
+        return
+    coerced: list[WebhookRuleConfig] = []
+    for item in webhooks.rules:
+        if isinstance(item, WebhookRuleConfig):
+            coerced.append(item)
+            continue
+        if isinstance(item, dict):
+            rule = WebhookRuleConfig()
+            _merge_dataclass(rule, item)
+            coerced.append(rule)
+    webhooks.rules = coerced
+
+
+_VALID_CONFIG_EXTENSIONS = {".yaml", ".yml"}
+
+
+def _validated_config_path(raw: str) -> Path:
+    resolved = Path(raw).resolve()
+    if resolved.suffix not in _VALID_CONFIG_EXTENSIONS:
+        raise ValueError(f"Config path must be a .yaml/.yml file, got: {resolved.name}")
+    return resolved
+
+
+def load_config(config_path: Optional[str] = None) -> AppConfig:
+    """Load config with two-layer merging: default.yaml then local overrides.
+
+    Layer 1: config/default.yaml (always loaded, sane defaults in VCS)
+    Layer 2: config/local.yaml or path from CONCENTRATOR_CONFIG env var
+             (user-specific overrides, gitignored)
+    """
+    cfg = AppConfig()
+
+    _apply_yaml(cfg, Path("config/default.yaml"))
+
+    local = config_path or os.environ.get("CONCENTRATOR_CONFIG", "config/local.yaml")
+    _apply_yaml(cfg, _validated_config_path(local))
+    _resolve_radio_frequency(cfg.radio)
+
+    return cfg
+
+
+def _get_local_yaml_path() -> Path:
+    """Resolve the local.yaml path used for user overrides."""
+    raw = os.environ.get("CONCENTRATOR_CONFIG", "config/local.yaml")
+    return _validated_config_path(raw)
+
+
+def save_section_to_yaml(section: str, values: dict) -> None:
+    """Merge values into a section of local.yaml without destroying other sections.
+
+    Reads the existing file (if any), updates only the specified section,
+    and writes back. Creates the file if it doesn't exist.
+    """
+    path = _get_local_yaml_path()
+    existing: dict = {}
+    if path.exists():
+        with open(path, "r") as fh:
+            existing = yaml.safe_load(fh) or {}
+
+    if section not in existing:
+        existing[section] = {}
+    if isinstance(existing[section], dict):
+        existing[section].update(values)
+    else:
+        existing[section] = values
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with open(path, "w") as fh:
+            yaml.dump(existing, fh, default_flow_style=False, sort_keys=False)
+    except PermissionError:
+        import getpass
+        hint_user = getpass.getuser() or "meshpoint"
+        raise PermissionError(
+            f"Cannot write to {path}. "
+            f"Fix with: sudo chown {hint_user}:{hint_user} {path}"
+        )
+
+
+def validate_activation(config: AppConfig) -> None:
+    """Require a valid signed API key before the concentrator pipeline starts."""
+    token = config.upstream.auth_token
+    if not token:
+        print("\n  Meshpoint is not activated.\n")
+        print("  An API key is required to run the concentrator.")
+        print("  Get a free key at https://meshradar.io\n")
+        print("  Then run:  meshpoint setup\n")
+        sys.exit(1)
+
+    from src.activation import verify_license_key
+
+    if not verify_license_key(token):
+        print("\n  Invalid API key.\n")
+        print("  The key in your config is not a valid Meshradar license.")
+        print("  Generate a new key at https://meshradar.io\n")
+        print("  Then run:  meshpoint setup\n")
+        sys.exit(1)

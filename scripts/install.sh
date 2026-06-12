@@ -1,0 +1,587 @@
+#!/usr/bin/env bash
+#
+# Meshpoint Installer
+#
+# Prepares a fresh Raspberry Pi for Meshpoint operation:
+#   1. System packages and build tools
+#   2. SPI / UART / GPS kernel config
+#   3. SX1302 HAL (libloragw) compilation
+#   4. Python virtual-env and pip dependencies
+#   5. systemd service installation
+#
+# Usage:
+#   sudo ./scripts/install.sh
+#
+# After completion, reboot then run:  meshpoint setup
+#
+set -euo pipefail
+
+MESHPOINT_DIR="/opt/meshpoint"
+HAL_BUILD_DIR="/opt/sx1302_hal"
+BOOT_CONFIG="/boot/firmware/config.txt"
+SERVICE_FILE="scripts/meshpoint.service"
+WATCHDOG_SERVICE_FILE="scripts/network-watchdog.service"
+CLI_SCRIPT="scripts/meshpoint"
+
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+NC='\033[0m'
+
+info()  { echo -e "${GREEN}[INFO]${NC}  $*"; }
+warn()  { echo -e "${YELLOW}[WARN]${NC}  $*"; }
+fail()  { echo -e "${RED}[FAIL]${NC}  $*"; exit 1; }
+
+# ── Pre-flight checks ──────────────────────────────────────────────
+
+if [[ $EUID -ne 0 ]]; then
+    fail "This script must be run as root.  Use:  sudo ./scripts/install.sh"
+fi
+
+if ! grep -qi "raspberry\|raspbian\|debian" /etc/os-release 2>/dev/null; then
+    warn "This doesn't look like Raspberry Pi OS. Proceeding anyway."
+fi
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+info "Source directory: ${SCRIPT_DIR}"
+
+# Detect upgrade vs fresh install for the post-install banner.
+# An existing local.yaml or an enabled meshpoint service is the
+# clearest signal that the previous install completed at least once.
+IS_UPGRADE=0
+if [ -f "${MESHPOINT_DIR}/config/local.yaml" ] \
+        || systemctl is-enabled meshpoint &>/dev/null; then
+    IS_UPGRADE=1
+    info "Existing installation detected: running in upgrade mode"
+fi
+
+# Read the version we're installing for the post-install banner.
+INSTALL_VERSION="$(
+    grep -oP '__version__ = "\K[^"]+' "${SCRIPT_DIR}/src/version.py" \
+        2>/dev/null || echo "unknown"
+)"
+
+# ── Upgrade fast path: refresh venv before apt/HAL work ───────────────
+# Dashboard apply stops the service, then runs this script. Git has
+# already checked out the new tree, so install requirements first so
+# a slow or interrupted HAL section cannot leave the service missing
+# new Python deps (e.g. cryptography on v0.7.6).
+
+_upgrade_refresh_python_deps() {
+    local req="${MESHPOINT_DIR}/requirements.txt"
+    local pip="${MESHPOINT_DIR}/venv/bin/pip"
+    if [ ! -x "$pip" ] || [ ! -f "$req" ]; then
+        warn "Skipping early pip refresh (venv or requirements missing)"
+        return 0
+    fi
+    info "Refreshing Python dependencies (upgrade fast path)..."
+    "$pip" install --upgrade pip -q
+    "$pip" install -r "$req" -q
+    "$pip" install pyserial -q
+}
+
+if [ "$IS_UPGRADE" = "1" ]; then
+    _upgrade_refresh_python_deps
+fi
+
+# ── 1. System packages ─────────────────────────────────────────────
+
+info "Updating system packages..."
+apt-get update -qq
+apt-get upgrade -y -qq
+
+info "Installing build tools and dependencies..."
+apt-get install -y -qq \
+    build-essential \
+    git \
+    python3 \
+    python3-venv \
+    python3-pip \
+    libsqlite3-dev \
+    i2c-tools
+
+# ── 2. Enable SPI ──────────────────────────────────────────────────
+
+info "Enabling SPI interface..."
+raspi-config nonint do_spi 0 2>/dev/null || warn "raspi-config SPI failed (may already be enabled)"
+
+# ── 2b. Enable I2C ────────────────────────────────────────────────
+
+info "Enabling I2C interface..."
+raspi-config nonint do_i2c 0 2>/dev/null || warn "raspi-config I2C failed (may already be enabled)"
+
+# ── 3. Enable UART for GPS ─────────────────────────────────────────
+
+info "Enabling UART hardware..."
+raspi-config nonint do_serial_hw 0 2>/dev/null || warn "raspi-config UART failed"
+
+info "Disabling serial console (needed for GPS on /dev/ttyAMA0)..."
+raspi-config nonint do_serial_cons 1 2>/dev/null || warn "raspi-config serial console failed"
+
+# Disable Bluetooth on primary UART so GPS gets /dev/ttyAMA0
+if [ -f "$BOOT_CONFIG" ]; then
+    if ! grep -q "dtoverlay=disable-bt" "$BOOT_CONFIG"; then
+        info "Adding dtoverlay=disable-bt to ${BOOT_CONFIG}"
+        echo "" >> "$BOOT_CONFIG"
+        echo "# Meshpoint: free primary UART for GPS" >> "$BOOT_CONFIG"
+        echo "dtoverlay=disable-bt" >> "$BOOT_CONFIG"
+    else
+        info "dtoverlay=disable-bt already present"
+    fi
+fi
+
+# ── 3b. Install gpsd for USB GPS receivers ─────────────────────────
+#
+# Enables plug-and-play USB GPS sticks (u-blox 7/8 etc) without
+# changes to local.yaml. udev auto-attaches recognized devices to
+# the gpsd daemon; the Meshpoint LocationSource (source: gpsd) reads
+# from gpsd's TCP socket on 127.0.0.1:2947.
+#
+# Idempotent: re-running install.sh does not rewrite a config that
+# already matches.
+
+info "Installing gpsd for USB GPS receivers..."
+apt-get install -y -qq gpsd gpsd-clients
+
+GPSD_DEFAULTS="/etc/default/gpsd"
+if [ -f "$GPSD_DEFAULTS" ]; then
+    # Desired settings:
+    #   START_DAEMON="true"  -- start at boot
+    #   USBAUTO="true"       -- udev auto-attaches recognized USB GPS
+    #   DEVICES=""           -- empty so udev owns the device list
+    #   GPSD_OPTIONS="-n"    -- no-wait mode, opens device before first client
+    GPSD_NEEDS_WRITE=0
+    grep -q '^START_DAEMON="true"' "$GPSD_DEFAULTS" || GPSD_NEEDS_WRITE=1
+    grep -q '^USBAUTO="true"'      "$GPSD_DEFAULTS" || GPSD_NEEDS_WRITE=1
+    grep -q '^DEVICES=""'          "$GPSD_DEFAULTS" || GPSD_NEEDS_WRITE=1
+    grep -q '^GPSD_OPTIONS="-n"'   "$GPSD_DEFAULTS" || GPSD_NEEDS_WRITE=1
+
+    if [ "$GPSD_NEEDS_WRITE" = "1" ]; then
+        info "Configuring ${GPSD_DEFAULTS} for USB hotplug..."
+        cat > "$GPSD_DEFAULTS" <<'_GPSD_DEFAULTS'
+# Default settings for the gpsd init script and the hotplug wrapper.
+# Managed by Meshpoint installer. Re-run scripts/install.sh to reset.
+
+START_DAEMON="true"
+USBAUTO="true"
+DEVICES=""
+GPSD_OPTIONS="-n"
+_GPSD_DEFAULTS
+    else
+        info "${GPSD_DEFAULTS} already configured"
+    fi
+fi
+
+systemctl enable gpsd.socket 2>/dev/null || warn "Could not enable gpsd.socket"
+systemctl restart gpsd.socket 2>/dev/null || warn "Could not start gpsd.socket"
+
+# ── 4. Build SX1302 HAL ───────────────────────────────────────────
+
+if [ -f "/usr/local/lib/libloragw.so" ]; then
+    info "libloragw.so already installed, skipping HAL build"
+else
+    info "Cloning SX1302 HAL..."
+    rm -rf "$HAL_BUILD_DIR"
+    git clone --depth 1 https://github.com/Lora-net/sx1302_hal.git "$HAL_BUILD_DIR"
+
+    info "Configuring HAL source..."
+    python3 - "${HAL_BUILD_DIR}/libloragw/src/loragw_sx1302.c" \
+              "${HAL_BUILD_DIR}/libloragw/src/loragw_hal.c" <<'_HALCFG'
+import sys
+from pathlib import Path
+
+def _rd(p):
+    f = Path(p)
+    if not f.is_file():
+        print("FAIL: " + p); sys.exit(1)
+    return f, f.read_text().replace("\r\n", "\n")
+
+f1, s1 = _rd(sys.argv[1])
+f2, s2 = _rd(sys.argv[2])
+
+_A = """\
+    int err = LGW_REG_SUCCESS;
+
+    /* Multi-SF modem configuration */
+    DEBUG_MSG("INFO: configuring LoRa (Multi-SF) SF5->SF6 with syncword PRIVATE (0x12)\\n");
+    err |= lgw_reg_w(SX1302_REG_RX_TOP_FRAME_SYNCH0_SF5_PEAK1_POS_SF5, 2);
+    err |= lgw_reg_w(SX1302_REG_RX_TOP_FRAME_SYNCH1_SF5_PEAK2_POS_SF5, 4);
+    err |= lgw_reg_w(SX1302_REG_RX_TOP_FRAME_SYNCH0_SF6_PEAK1_POS_SF6, 2);
+    err |= lgw_reg_w(SX1302_REG_RX_TOP_FRAME_SYNCH1_SF6_PEAK2_POS_SF6, 4);
+    if (public == true) {
+        DEBUG_MSG("INFO: configuring LoRa (Multi-SF) SF7->SF12 with syncword PUBLIC (0x34)\\n");
+        err |= lgw_reg_w(SX1302_REG_RX_TOP_FRAME_SYNCH0_SF7TO12_PEAK1_POS_SF7TO12, 6);
+        err |= lgw_reg_w(SX1302_REG_RX_TOP_FRAME_SYNCH1_SF7TO12_PEAK2_POS_SF7TO12, 8);
+    } else {
+        DEBUG_MSG("INFO: configuring LoRa (Multi-SF) SF7->SF12 with syncword PRIVATE (0x12)\\n");
+        err |= lgw_reg_w(SX1302_REG_RX_TOP_FRAME_SYNCH0_SF7TO12_PEAK1_POS_SF7TO12, 2);
+        err |= lgw_reg_w(SX1302_REG_RX_TOP_FRAME_SYNCH1_SF7TO12_PEAK2_POS_SF7TO12, 4);
+    }
+
+    /* LoRa Service modem configuration */
+    if ((public == false) || (lora_service_sf == DR_LORA_SF5) || (lora_service_sf == DR_LORA_SF6)) {
+        DEBUG_PRINTF("INFO: configuring LoRa (Service) SF%u with syncword PRIVATE (0x12)\\n", lora_service_sf);
+        err |= lgw_reg_w(SX1302_REG_RX_TOP_LORA_SERVICE_FSK_FRAME_SYNCH0_PEAK1_POS, 2);
+        err |= lgw_reg_w(SX1302_REG_RX_TOP_LORA_SERVICE_FSK_FRAME_SYNCH1_PEAK2_POS, 4);
+    } else {
+        DEBUG_PRINTF("INFO: configuring LoRa (Service) SF%u with syncword PUBLIC (0x34)\\n", lora_service_sf);
+        err |= lgw_reg_w(SX1302_REG_RX_TOP_LORA_SERVICE_FSK_FRAME_SYNCH0_PEAK1_POS, 6);
+        err |= lgw_reg_w(SX1302_REG_RX_TOP_LORA_SERVICE_FSK_FRAME_SYNCH1_PEAK2_POS, 8);
+    }
+
+    return err;"""
+
+_B = """\
+    int err = LGW_REG_SUCCESS;
+
+    uint8_t sw_reg1, sw_reg2;
+    if (public == true) {
+        sw_reg1 = 6;
+        sw_reg2 = 8;
+    } else if (lora_service_sf > 12) {
+        sw_reg1 = ((lora_service_sf >> 4) & 0x0F) * 2;
+        sw_reg2 = (lora_service_sf & 0x0F) * 2;
+        DEBUG_PRINTF("INFO: sync cfg 0x%02X -> %u, %u\\n", lora_service_sf, sw_reg1, sw_reg2);
+    } else {
+        sw_reg1 = 2;
+        sw_reg2 = 4;
+    }
+
+    sx1302_tx_sw_peak1 = sw_reg1;
+    sx1302_tx_sw_peak2 = sw_reg2;
+
+    err |= lgw_reg_w(SX1302_REG_RX_TOP_FRAME_SYNCH0_SF5_PEAK1_POS_SF5, sw_reg1);
+    err |= lgw_reg_w(SX1302_REG_RX_TOP_FRAME_SYNCH1_SF5_PEAK2_POS_SF5, sw_reg2);
+    err |= lgw_reg_w(SX1302_REG_RX_TOP_FRAME_SYNCH0_SF6_PEAK1_POS_SF6, sw_reg1);
+    err |= lgw_reg_w(SX1302_REG_RX_TOP_FRAME_SYNCH1_SF6_PEAK2_POS_SF6, sw_reg2);
+
+    err |= lgw_reg_w(SX1302_REG_RX_TOP_FRAME_SYNCH0_SF7TO12_PEAK1_POS_SF7TO12, sw_reg1);
+    err |= lgw_reg_w(SX1302_REG_RX_TOP_FRAME_SYNCH1_SF7TO12_PEAK2_POS_SF7TO12, sw_reg2);
+
+    err |= lgw_reg_w(SX1302_REG_RX_TOP_LORA_SERVICE_FSK_FRAME_SYNCH0_PEAK1_POS, sw_reg1);
+    err |= lgw_reg_w(SX1302_REG_RX_TOP_LORA_SERVICE_FSK_FRAME_SYNCH1_PEAK2_POS, sw_reg2);
+
+    return err;"""
+
+if "sw_reg1" in s1:
+    pass
+elif _A in s1:
+    s1 = s1.replace(_A, _B, 1)
+else:
+    print("FAIL: source mismatch in " + str(f1)); sys.exit(1)
+
+_TX_A = """\
+    /* Syncword */
+    if ((lwan_public == false) || (pkt_data->datarate == DR_LORA_SF5) || (pkt_data->datarate == DR_LORA_SF6)) {
+        DEBUG_MSG("Setting LoRa syncword 0x12\\n");
+        err = lgw_reg_w(SX1302_REG_TX_TOP_FRAME_SYNCH_0_PEAK1_POS(pkt_data->rf_chain), 2);
+        CHECK_ERR(err);
+        err = lgw_reg_w(SX1302_REG_TX_TOP_FRAME_SYNCH_1_PEAK2_POS(pkt_data->rf_chain), 4);
+        CHECK_ERR(err);
+    } else {
+        DEBUG_MSG("Setting LoRa syncword 0x34\\n");
+        err = lgw_reg_w(SX1302_REG_TX_TOP_FRAME_SYNCH_0_PEAK1_POS(pkt_data->rf_chain), 6);
+        CHECK_ERR(err);
+        err = lgw_reg_w(SX1302_REG_TX_TOP_FRAME_SYNCH_1_PEAK2_POS(pkt_data->rf_chain), 8);
+        CHECK_ERR(err);
+    }"""
+
+_TX_B = """\
+    /* Syncword */
+    err = lgw_reg_w(SX1302_REG_TX_TOP_FRAME_SYNCH_0_PEAK1_POS(pkt_data->rf_chain), sx1302_tx_sw_peak1);
+    CHECK_ERR(err);
+    err = lgw_reg_w(SX1302_REG_TX_TOP_FRAME_SYNCH_1_PEAK2_POS(pkt_data->rf_chain), sx1302_tx_sw_peak2);
+    CHECK_ERR(err);"""
+
+if "static uint8_t sx1302_tx_sw_peak1" not in s1:
+    s1 = s1.replace("int sx1302_lora_syncword(", "static uint8_t sx1302_tx_sw_peak1 = 2;\nstatic uint8_t sx1302_tx_sw_peak2 = 4;\n\nint sx1302_lora_syncword(", 1)
+
+if "sx1302_tx_sw_peak1 = sw_reg1" not in s1:
+    s1 = s1.replace("    sw_reg2 = 4;\n    }\n\n    err |= lgw_reg_w(SX1302_REG_RX_TOP_FRAME_SYNCH0_SF5_PEAK1_POS_SF5", "    sw_reg2 = 4;\n    }\n\n    sx1302_tx_sw_peak1 = sw_reg1;\n    sx1302_tx_sw_peak2 = sw_reg2;\n\n    err |= lgw_reg_w(SX1302_REG_RX_TOP_FRAME_SYNCH0_SF5_PEAK1_POS_SF5", 1)
+
+if _TX_A in s1:
+    s1 = s1.replace(_TX_A, _TX_B, 1)
+
+f1.write_text(s1, newline="\n")
+
+_C = [
+("""\
+        /* Find the temperature sensor on the known supported ports */
+        for (i = 0; i < (int)(sizeof I2C_PORT_TEMP_SENSOR); i++) {
+            ts_addr = I2C_PORT_TEMP_SENSOR[i];
+            err = i2c_linuxdev_open(I2C_DEVICE, ts_addr, &ts_fd);
+            if (err != LGW_I2C_SUCCESS) {
+                printf("ERROR: failed to open I2C for temperature sensor on port 0x%02X\\n", ts_addr);
+                return LGW_HAL_ERROR;
+            }
+
+            err = stts751_configure(ts_fd, ts_addr);
+            if (err != LGW_I2C_SUCCESS) {
+                printf("INFO: no temperature sensor found on port 0x%02X\\n", ts_addr);
+                i2c_linuxdev_close(ts_fd);
+                ts_fd = -1;
+            } else {
+                printf("INFO: found temperature sensor on port 0x%02X\\n", ts_addr);
+                break;
+            }
+        }
+        if (i == sizeof I2C_PORT_TEMP_SENSOR) {
+            printf("ERROR: no temperature sensor found.\\n");
+            return LGW_HAL_ERROR;
+        }""",
+"""\
+        /* Find the temperature sensor on the known supported ports */
+        for (i = 0; i < (int)(sizeof I2C_PORT_TEMP_SENSOR); i++) {
+            ts_addr = I2C_PORT_TEMP_SENSOR[i];
+            err = i2c_linuxdev_open(I2C_DEVICE, ts_addr, &ts_fd);
+            if (err != LGW_I2C_SUCCESS) {
+                printf("WARNING: could not open I2C on port 0x%02X\\n", ts_addr);
+                ts_fd = -1;
+                continue;
+            }
+
+            err = stts751_configure(ts_fd, ts_addr);
+            if (err != LGW_I2C_SUCCESS) {
+                printf("INFO: no temperature sensor found on port 0x%02X\\n", ts_addr);
+                i2c_linuxdev_close(ts_fd);
+                ts_fd = -1;
+            } else {
+                printf("INFO: found temperature sensor on port 0x%02X\\n", ts_addr);
+                break;
+            }
+        }
+        if (ts_fd < 0) {
+            printf("WARNING: sensor not available, using default\\n");
+        }"""),
+("""\
+        case LGW_COM_SPI:
+            err = stts751_get_temperature(ts_fd, ts_addr, temperature);
+            break;""",
+"""\
+        case LGW_COM_SPI:
+            if (ts_fd > 0) {
+                err = stts751_get_temperature(ts_fd, ts_addr, temperature);
+            } else {
+                *temperature = 25.0;
+                err = LGW_HAL_SUCCESS;
+            }
+            break;"""),
+("""\
+        DEBUG_MSG("INFO: Closing I2C for temperature sensor\\n");
+        x = i2c_linuxdev_close(ts_fd);
+        if (x != 0) {
+            printf("ERROR: failed to close I2C temperature sensor device (err=%i)\\n", x);
+            err = LGW_HAL_ERROR;
+        }""",
+"""\
+        if (ts_fd > 0) {
+            DEBUG_MSG("INFO: Closing I2C for temperature sensor\\n");
+            x = i2c_linuxdev_close(ts_fd);
+            if (x != 0) {
+                printf("ERROR: failed to close I2C temperature sensor device (err=%i)\\n", x);
+                err = LGW_HAL_ERROR;
+            }
+        }"""),
+]
+
+ok = True
+for o, n in _C:
+    if n in s2:
+        continue
+    if o not in s2:
+        ok = False; break
+    s2 = s2.replace(o, n, 1)
+if ok:
+    f2.write_text(s2, newline="\n")
+else:
+    print("FAIL: source mismatch in " + str(f2)); sys.exit(1)
+_HALCFG
+
+    info "Compiling libloragw (this takes a few minutes)..."
+    cd "$HAL_BUILD_DIR"
+    make clean 2>/dev/null || true
+    make -j"$(nproc)"
+
+    info "Recompiling with -fPIC for shared library..."
+    mkdir -p pic_obj
+
+    for src in libtools/src/*.c; do
+        gcc -c -O2 -fPIC -Wall -Wextra -std=c99 \
+            -Ilibtools/inc -Ilibtools \
+            "$src" -o "pic_obj/$(basename "${src%.c}.o")"
+    done
+
+    for src in libloragw/src/*.c; do
+        gcc -c -O2 -fPIC -Wall -Wextra -std=c99 \
+            -Ilibloragw/inc -Ilibloragw -Ilibtools/inc \
+            "$src" -o "pic_obj/$(basename "${src%.c}.o")"
+    done
+
+    info "Linking libloragw.so..."
+    gcc -shared -o libloragw/libloragw.so pic_obj/*.o -lrt -lm -lpthread
+
+    info "Installing libloragw.so..."
+    cp libloragw/libloragw.so /usr/local/lib/
+    ldconfig
+    info "libloragw.so installed to /usr/local/lib/"
+fi
+
+# ── 4b. Apply TX sync word patch ─────────────────────────────────
+
+HAL_SRC="${HAL_BUILD_DIR}/libloragw/src/loragw_sx1302.c"
+if [ -f "$HAL_SRC" ]; then
+    info "Applying TX sync word patch..."
+    bash "${SCRIPT_DIR}/scripts/patch_hal.sh"
+fi
+
+# ── 5. Install Meshpoint application ──────────────────────────────
+
+info "Installing Meshpoint to ${MESHPOINT_DIR}..."
+mkdir -p "$MESHPOINT_DIR"
+
+rsync -a --exclude='venv' \
+         --exclude='.git' \
+         --exclude='__pycache__' \
+         --exclude='cdk.out' \
+         --exclude='cloud/build' \
+         --exclude='data' \
+         --exclude='*.pyc' \
+         "${SCRIPT_DIR}/" "$MESHPOINT_DIR/"
+
+# ── 5b. Remove stale compiled core modules from prior installs ─────
+# Releases before 0.7.0 shipped .cpython-*.so files alongside the
+# .py source. Python prefers the .so at import time, so any leftover
+# binary would silently shadow the current source. rsync above does
+# not delete files that are absent from the source tree, so we
+# explicitly clean them up here.
+
+if find "${MESHPOINT_DIR}/src" -name '*.cpython-*.so' -print -quit | grep -q .; then
+    info "Removing stale compiled modules from previous installation..."
+    find "${MESHPOINT_DIR}/src" -name '*.cpython-*.so' -delete
+fi
+
+# ── 6. Python virtual environment ──────────────────────────────────
+
+info "Setting up Python virtual environment..."
+python3 -m venv "${MESHPOINT_DIR}/venv"
+source "${MESHPOINT_DIR}/venv/bin/activate"
+
+pip install --upgrade pip -q
+pip install -r "${MESHPOINT_DIR}/requirements.txt" -q
+pip install pyserial -q
+deactivate
+
+# ── 7. Create data directory ───────────────────────────────────────
+
+mkdir -p "${MESHPOINT_DIR}/data"
+
+# ── 8. Create meshpoint system user ────────────────────────────────
+
+if ! id -u meshpoint &>/dev/null; then
+    info "Creating system user 'meshpoint'..."
+    useradd --system --no-create-home --shell /usr/sbin/nologin meshpoint
+fi
+
+# Grant access to SPI, UART, GPIO, and I2C
+usermod -a -G spi,gpio,dialout,i2c meshpoint 2>/dev/null || true
+
+# Grant the service user read access to its own systemd journal so the
+# dashboard's `meshpoint logs` button (and `journalctl -u meshpoint`
+# inside the web terminal) work without sudo. This is the same group
+# Raspberry Pi OS uses to gate journal access for the `pi` user.
+usermod -a -G systemd-journal,adm meshpoint 2>/dev/null || true
+chown -R meshpoint:meshpoint "${MESHPOINT_DIR}/data"
+chown -R meshpoint:meshpoint "${MESHPOINT_DIR}/config"
+
+# Espressif USB serial devices (Heltec V3/V4, T-Beam ESP32-S3) may not
+# default to dialout group on all Pi OS versions. Add a udev rule so
+# the meshpoint service user can access them for relay and MeshCore.
+UDEV_RULE='SUBSYSTEM=="tty", ATTRS{idVendor}=="303a", MODE="0666"'
+UDEV_FILE="/etc/udev/rules.d/99-meshpoint-esp.rules"
+if [ ! -f "$UDEV_FILE" ]; then
+    info "Installing udev rule for Espressif USB serial devices..."
+    echo "$UDEV_RULE" > "$UDEV_FILE"
+    udevadm control --reload-rules 2>/dev/null || true
+    udevadm trigger 2>/dev/null || true
+fi
+
+# Allow service user to restart/stop its own service (dashboard + remote commands)
+info "Installing sudoers rule for service management..."
+cp "${MESHPOINT_DIR}/config/sudoers-meshpoint" /etc/sudoers.d/meshpoint
+chmod 440 /etc/sudoers.d/meshpoint
+
+if [ -f "${MESHPOINT_DIR}/scripts/ensure_git_safe.sh" ]; then
+    info "Configuring git safe.directory for ${MESHPOINT_DIR}..."
+    chmod +x "${MESHPOINT_DIR}/scripts/ensure_git_safe.sh"
+    bash "${MESHPOINT_DIR}/scripts/ensure_git_safe.sh" "${MESHPOINT_DIR}"
+fi
+
+# ── 9. Configure journald log rotation ─────────────────────────────
+
+info "Configuring journald log limits (100M, 7-day retention)..."
+mkdir -p /etc/systemd/journald.conf.d
+cp "${MESHPOINT_DIR}/config/journald-meshpoint.conf" /etc/systemd/journald.conf.d/meshpoint.conf
+systemctl restart systemd-journald 2>/dev/null || warn "Could not restart journald"
+
+# ── 10. Install systemd service ────────────────────────────────────
+
+info "Installing systemd service..."
+cp "${MESHPOINT_DIR}/${SERVICE_FILE}" /etc/systemd/system/meshpoint.service
+systemctl daemon-reload
+systemctl enable meshpoint
+info "Service enabled (will start after 'meshpoint setup')"
+
+# ── 11. Install network watchdog ───────────────────────────────────
+
+info "Installing WiFi network watchdog..."
+cp "${MESHPOINT_DIR}/${WATCHDOG_SERVICE_FILE}" /etc/systemd/system/network-watchdog.service
+systemctl daemon-reload
+systemctl enable network-watchdog
+systemctl start network-watchdog 2>/dev/null || warn "Could not start network-watchdog (will start on next boot)"
+info "Network watchdog enabled"
+
+# ── 12. Install CLI tool ───────────────────────────────────────────
+
+info "Installing meshpoint CLI..."
+chmod +x "${MESHPOINT_DIR}/${CLI_SCRIPT}"
+ln -sf "${MESHPOINT_DIR}/${CLI_SCRIPT}" /usr/local/bin/meshpoint
+
+# ── Done ────────────────────────────────────────────────────────────
+
+echo ""
+echo "==========================================="
+if [ "$IS_UPGRADE" = "1" ]; then
+    echo "  Meshpoint upgrade to v${INSTALL_VERSION} complete!"
+    echo "==========================================="
+    echo ""
+    echo "  Restart the service to apply changes:"
+    echo "       sudo systemctl restart meshpoint"
+    echo ""
+    echo "  A reboot is NOT required: SPI/UART/I2C are"
+    echo "  already configured from the original install."
+    echo ""
+else
+    echo "  Meshpoint installation complete!"
+    echo "==========================================="
+    echo ""
+    echo "  Next steps:"
+    echo ""
+    echo "  1. Reboot to apply SPI/UART changes:"
+    echo "       sudo reboot"
+    echo ""
+    echo "  2. After reboot, run the setup wizard:"
+    echo "       sudo meshpoint setup"
+    echo ""
+    echo "  3. The wizard will walk you through:"
+    echo "       - Hardware detection"
+    echo "       - API key configuration"
+    echo "       - Device naming and GPS"
+    echo "       - Starting the service"
+    echo ""
+    echo "  IMPORTANT: Never yank the power cable"
+    echo "  without shutting down first. Always run:"
+    echo "       sudo poweroff"
+    echo "  and wait for the LED to go dark."
+    echo ""
+fi
+echo "==========================================="

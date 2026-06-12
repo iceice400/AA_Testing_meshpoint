@@ -1,0 +1,137 @@
+"""Tests for ``UpdateApplier`` using a fake :data:`Runner`.
+
+The applier is unit-testable because subprocess invocation is
+delegated; we plug in a recorder runner that returns canned
+exit codes and captures the command list for assertion.
+"""
+
+from __future__ import annotations
+
+import unittest
+from typing import Optional
+from unittest import mock
+from unittest.mock import ANY, patch
+
+from src.api.update.apply import UpdateApplier
+
+
+class _RecorderRunner:
+    """Test double for :data:`src.api.update.apply.Runner`."""
+
+    def __init__(self, *, fail_at: Optional[str] = None) -> None:
+        self.calls: list[list[str]] = []
+        self.cwds: list[Optional[str]] = []
+        self._fail_at = fail_at
+
+    def __call__(
+        self, args: list[str], cwd: Optional[str], timeout_seconds: float,
+    ) -> tuple[int, str, str]:
+        self.calls.append(list(args))
+        self.cwds.append(cwd)
+        if "rev-parse" in args and "HEAD" in args:
+            return 0, "abc123\n", ""
+        if self._fail_at and self._fail_at in " ".join(args):
+            return 1, "", "boom"
+        return 0, "ok", ""
+
+
+class TestUpdateApplier(unittest.TestCase):
+    @patch(
+        "src.api.update.apply.schedule_detached_apply_finish",
+        return_value=mock.Mock(pid=12345),
+    )
+    @patch("src.api.update.apply.ensure_git_safe_directory", return_value=True)
+    @patch("src.api.update.apply.write_rollback_state")
+    def test_apply_persists_rollback_before_git_steps(
+        self, mock_write, _mock_safe, _mock_finish,
+    ) -> None:
+        runner = _RecorderRunner()
+        applier = UpdateApplier(runner=runner, repo_path=".")
+        applier.apply(branch="feat/v0.7.4")
+        mock_write.assert_called_once_with(
+            "abc123", target_branch="feat/v0.7.4", path=ANY,
+        )
+
+    @patch(
+        "src.api.update.apply.schedule_detached_apply_finish",
+        return_value=mock.Mock(pid=12345),
+    )
+    @patch("src.api.update.apply.ensure_git_safe_directory", return_value=True)
+    def test_apply_runs_full_chain_in_order(self, _mock_safe, _mock_finish) -> None:
+        runner = _RecorderRunner()
+        applier = UpdateApplier(runner=runner, repo_path=".")
+        result = applier.apply(branch="main")
+        self.assertTrue(result.success)
+        self.assertEqual(result.target_branch, "main")
+        self.assertEqual(result.pre_update_sha, "abc123")
+        labels = [entry["step"] for entry in result.log]
+        self.assertEqual(
+            labels,
+            [
+                "git fetch",
+                "git checkout",
+                "git reset",
+                "upgrade",
+            ],
+        )
+        joined = " ".join(" ".join(c) for c in runner.calls)
+        self.assertNotIn("apply_finish", joined)
+        self.assertNotIn("systemctl restart", joined)
+        self.assertNotIn("install.sh", joined)
+        self.assertTrue(result.log[-1].get("detached"))
+
+    @patch("src.api.update.apply.ensure_git_safe_directory", return_value=True)
+    def test_apply_stops_on_first_failure(self, _mock_safe) -> None:
+        runner = _RecorderRunner(fail_at="checkout")
+        applier = UpdateApplier(runner=runner, repo_path=".")
+        result = applier.apply(branch="main")
+        self.assertFalse(result.success)
+        self.assertEqual(result.failed_step, "git checkout")
+        labels = [entry["step"] for entry in result.log]
+        self.assertEqual(labels, ["git fetch", "git checkout"])
+
+    @patch(
+        "src.api.update.apply.schedule_detached_apply_finish",
+        return_value=mock.Mock(pid=12345),
+    )
+    @patch("src.api.update.apply.ensure_git_safe_directory", return_value=True)
+    def test_apply_streams_each_step_via_callback(self, _mock_safe, _mock_finish) -> None:
+        runner = _RecorderRunner()
+        applier = UpdateApplier(runner=runner, repo_path=".")
+        events: list[tuple[str, str]] = []
+        applier.apply(
+            branch="main",
+            on_step=lambda label, state, detail=None: events.append((label, state)),
+        )
+        starts = [e for e in events if e[1] == "started"]
+        completions = [e for e in events if e[1] == "completed"]
+        self.assertEqual(len(starts), 4)
+        self.assertEqual(len(completions), 4)
+
+    @patch(
+        "src.api.update.apply.schedule_detached_apply_finish",
+        return_value=mock.Mock(pid=12345),
+    )
+    @patch("src.api.update.apply.ensure_git_safe_directory", return_value=True)
+    def test_rollback_runs_reset_then_restart(self, _mock_safe, _mock_finish) -> None:
+        runner = _RecorderRunner()
+        applier = UpdateApplier(runner=runner, repo_path=".")
+        result = applier.rollback(sha="deadbeef")
+        self.assertTrue(result.success)
+        steps = [entry["step"] for entry in result.log]
+        self.assertEqual(steps, ["git reset", "upgrade"])
+        self.assertIn("deadbeef", " ".join(runner.calls[0]))
+        self.assertEqual(len(runner.calls), 1)
+        self.assertTrue(result.log[-1].get("detached"))
+
+    @patch("src.api.update.apply.ensure_git_safe_directory", return_value=True)
+    def test_rollback_failure_returns_failed_step(self, _mock_safe) -> None:
+        runner = _RecorderRunner(fail_at="reset")
+        applier = UpdateApplier(runner=runner, repo_path=".")
+        result = applier.rollback(sha="deadbeef")
+        self.assertFalse(result.success)
+        self.assertEqual(result.failed_step, "git reset")
+
+
+if __name__ == "__main__":
+    unittest.main()

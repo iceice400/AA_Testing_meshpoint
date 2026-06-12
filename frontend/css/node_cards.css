@@ -1,0 +1,317 @@
+/* ---- Node Cards ---- */
+
+.nc-empty {
+    padding: 2rem 1rem;
+    text-align: center;
+    color: var(--text-muted);
+    font-size: 0.8rem;
+}
+
+/* ---- Controls row (sort + filter, 1kOhm backlog) ---- */
+
+.nc-controls {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.45rem 0.6rem;
+    border-bottom: 1px solid rgba(35, 48, 73, 0.5);
+    background: rgba(15, 23, 42, 0.4);
+    flex-wrap: wrap;
+}
+
+.nc-controls__sort {
+    background: var(--bg-secondary, #0f172a);
+    color: var(--text-primary, #e2e8f0);
+    border: 1px solid rgba(35, 48, 73, 0.7);
+    border-radius: 4px;
+    font-size: 0.7rem;
+    padding: 0.2rem 0.4rem;
+    cursor: pointer;
+    line-height: 1.2;
+}
+
+.nc-controls__sort:focus {
+    outline: 1px solid var(--accent-cyan);
+    outline-offset: 1px;
+}
+
+.nc-controls__filter {
+    display: inline-flex;
+    gap: 0.25rem;
+    margin-left: auto;
+}
+
+.nc-pill {
+    background: transparent;
+    color: var(--text-muted);
+    border: 1px solid rgba(35, 48, 73, 0.7);
+    border-radius: 999px;
+    font-size: 0.65rem;
+    padding: 0.15rem 0.55rem;
+    cursor: pointer;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    line-height: 1.2;
+    transition: background-color 120ms ease, color 120ms ease, border-color 120ms ease;
+}
+
+.nc-pill:hover {
+    color: var(--text-primary, #e2e8f0);
+    border-color: rgba(6, 182, 212, 0.4);
+}
+
+.nc-pill--active {
+    background: rgba(6, 182, 212, 0.15);
+    color: var(--accent-cyan);
+    border-color: var(--accent-cyan);
+}
+
+.nc-pill--star {
+    font-size: 0.85rem;
+    line-height: 1;
+    padding: 0.15rem 0.45rem;
+    color: var(--text-muted);
+}
+
+.nc-pill--star.nc-pill--active {
+    background: rgba(245, 158, 11, 0.18);
+    color: var(--accent-amber, #f59e0b);
+    border-color: var(--accent-amber, #f59e0b);
+}
+
+.nc-pill:focus-visible {
+    outline: 1px solid var(--accent-cyan);
+    outline-offset: 1px;
+}
+
+/* ---- Favorite star button on each card ---- */
+
+.nc-card__favorite {
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    font-size: 1rem;
+    line-height: 1;
+    padding: 0.15rem 0.3rem;
+    cursor: pointer;
+    margin-left: 0.2rem;
+    opacity: 0.7;
+    transition: color 120ms ease, opacity 120ms ease, transform 120ms ease;
+}
+
+.nc-card__favorite:hover {
+    color: var(--accent-amber, #f59e0b);
+    opacity: 1;
+    transform: scale(1.1);
+}
+
+.nc-card__favorite--on {
+    color: var(--accent-amber, #f59e0b);
+    opacity: 1;
+}
+
+.nc-card__favorite:focus-visible {
+    outline: 1px solid var(--accent-amber, #f59e0b);
+    outline-offset: 1px;
+}
+
+.nc-card--fav {
+    background: rgba(245, 158, 11, 0.04);
+}
+
+.nc-card {
+    padding: 0.5rem 0.6rem;
+    border-bottom: 1px solid rgba(35, 48, 73, 0.5);
+    cursor: pointer;
+    transition: background 0.15s;
+}
+
+.nc-card:hover {
+    background: rgba(6, 182, 212, 0.06);
+}
+
+.nc-card__top {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-bottom: 0.3rem;
+}
+
+.nc-avatar {
+    width: 32px;
+    height: 32px;
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.6rem;
+    font-weight: 700;
+    font-family: var(--font-mono);
+    color: #fff;
+    flex-shrink: 0;
+    letter-spacing: -0.02em;
+}
+
+.nc-card__identity {
+    flex: 1;
+    min-width: 0;
+}
+
+.nc-card__name {
+    font-weight: 600;
+    font-size: 0.8rem;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+}
+
+.nc-card__heard {
+    font-size: 0.65rem;
+    font-family: var(--font-mono);
+    color: var(--text-muted);
+}
+
+.nc-online {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    display: inline-block;
+    flex-shrink: 0;
+}
+
+.nc-online--on {
+    background: var(--accent-green);
+    box-shadow: 0 0 5px var(--accent-green);
+}
+
+.nc-online--off {
+    background: var(--text-muted);
+    opacity: 0.4;
+}
+
+.nc-proto {
+    font-size: 0.55rem;
+    font-weight: 700;
+    padding: 0.1rem 0.3rem;
+    border-radius: 3px;
+    flex-shrink: 0;
+}
+
+.nc-proto--meshtastic {
+    background: rgba(59, 130, 246, 0.15);
+    color: var(--accent-blue);
+}
+
+.nc-proto--meshcore {
+    background: rgba(168, 85, 247, 0.15);
+    color: var(--accent-purple);
+}
+
+/* ---- Card Rows ---- */
+
+.nc-card__row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.25rem;
+    margin-top: 0.25rem;
+}
+
+.nc-card__row--meta {
+    margin-top: 0.3rem;
+    padding-top: 0.3rem;
+    border-top: 1px solid rgba(35, 48, 73, 0.3);
+}
+
+/* ---- Chips ---- */
+
+.nc-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.2rem;
+    padding: 0.1rem 0.35rem;
+    font-size: 0.6rem;
+    font-family: var(--font-mono);
+    border-radius: 3px;
+    background: rgba(255, 255, 255, 0.04);
+    color: var(--text-secondary);
+    white-space: nowrap;
+}
+
+.nc-chip--signal {
+    font-weight: 600;
+}
+
+.nc-chip--quality {
+    font-weight: 700;
+    font-size: 0.55rem;
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+}
+
+.nc-chip--excellent {
+    color: #00e676;
+    background: rgba(0, 230, 118, 0.1);
+}
+
+.nc-chip--good {
+    color: #4ecdc4;
+    background: rgba(78, 205, 196, 0.1);
+}
+
+.nc-chip--fair {
+    color: #ffd54f;
+    background: rgba(255, 213, 79, 0.1);
+}
+
+.nc-chip--poor {
+    color: #ff5252;
+    background: rgba(255, 82, 82, 0.1);
+}
+
+.nc-chip--telem {
+    color: var(--accent-cyan);
+    background: rgba(6, 182, 212, 0.08);
+}
+
+.nc-chip--meta {
+    color: var(--text-muted);
+    background: rgba(255, 255, 255, 0.03);
+    font-size: 0.55rem;
+}
+
+.nc-chip--id {
+    color: var(--text-muted);
+    font-size: 0.55rem;
+    opacity: 0.7;
+}
+
+/* ---- Signal Bars (inside chips) ---- */
+
+.nc-bars {
+    display: inline-flex;
+    align-items: flex-end;
+    gap: 1px;
+    margin-right: 0.2em;
+}
+
+.nc-bar {
+    display: inline-block;
+    width: 2.5px;
+    border-radius: 1px;
+    background: rgba(255, 255, 255, 0.12);
+}
+
+.nc-bar--h1 { height: 4px; }
+.nc-bar--h2 { height: 6px; }
+.nc-bar--h3 { height: 8px; }
+.nc-bar--h4 { height: 10px; }
+.nc-bar--h5 { height: 12px; }
+
+.nc-chip--excellent .nc-bar.active { background: #00e676; }
+.nc-chip--good .nc-bar.active { background: #4ecdc4; }
+.nc-chip--fair .nc-bar.active { background: #ffd54f; }
+.nc-chip--poor .nc-bar.active { background: #ff5252; }

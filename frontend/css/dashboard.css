@@ -1,0 +1,499 @@
+:root {
+    --bg-primary: #0a0e17;
+    --bg-secondary: #111827;
+    --bg-card: #162033;
+    --bg-glass: rgba(22, 32, 51, 0.7);
+    --border: #233049;
+    --border-glow: rgba(6, 182, 212, 0.2);
+    --text-primary: #e2e8f0;
+    --text-secondary: #94a3b8;
+    --text-muted: #64748b;
+    --accent-green: #00e5a0;
+    --accent-cyan: #06b6d4;
+    --accent-blue: #3b82f6;
+    --accent-purple: #a855f7;
+    --accent-amber: #f59e0b;
+    --accent-red: #ef4444;
+    --glow-cyan: 0 0 8px rgba(6, 182, 212, 0.3);
+    --glow-green: 0 0 8px rgba(0, 229, 160, 0.4);
+    --glow-amber: 0 0 8px rgba(245, 158, 11, 0.4);
+    --glow-red: 0 0 8px rgba(239, 68, 68, 0.4);
+    --font-mono: 'JetBrains Mono', 'Fira Code', monospace;
+    --font-sans: 'Inter', -apple-system, sans-serif;
+    --radius: 8px;
+    --radius-sm: 4px;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+html, body {
+    font-family: var(--font-sans);
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    height: 100vh;
+    width: 100vw;
+    overflow: hidden;
+    margin: 0;
+    padding: 0;
+}
+
+.app__content {
+    overflow: hidden;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+}
+
+.section {
+    flex: 1;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+}
+
+.section--active {
+    animation: sectionFadeIn 220ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes sectionFadeIn {
+    from { opacity: 0; transform: translateY(4px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+.section__placeholder {
+    padding: 2rem;
+    color: var(--text-secondary);
+    font-family: var(--font-sans);
+}
+
+.section__placeholder h2 {
+    margin-bottom: 0.5rem;
+    font-size: 1.1rem;
+    font-weight: 600;
+    color: var(--text-primary);
+}
+
+.section__placeholder p {
+    color: var(--text-muted);
+    font-size: 0.9rem;
+}
+
+/*
+ * Top-bar styles moved to the sidebar in v0.7.4. Status dot, signout,
+ * and update-badge keep their visual identity inside the sidebar
+ * footer / header.
+ */
+
+.status-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    display: inline-block;
+}
+
+.status-dot--connected {
+    background: var(--accent-green);
+    box-shadow: 0 0 6px var(--accent-green);
+}
+
+.status-dot--disconnected { background: var(--accent-red); }
+
+.status-label {
+    font-size: 0.7rem;
+    color: var(--text-muted);
+}
+
+.update-badge {
+    color: var(--accent-amber);
+    font-size: 1.1rem;
+    cursor: pointer;
+    text-decoration: none;
+    animation: updatePulse 2s ease-in-out infinite;
+}
+
+.hidden { display: none !important; }
+
+@keyframes updatePulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.4; }
+}
+
+/* ---- Stat Cards ---- */
+.dashboard__stats {
+    display: flex;
+    gap: 0.5rem;
+    flex-shrink: 0;
+    overflow-x: auto;
+    scrollbar-width: thin;
+}
+
+.stat-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 0.35rem 0.6rem;
+    transition: border-color 0.2s;
+    flex: 0 0 auto;
+    min-width: 100px;
+}
+
+.stat-card:hover { border-color: var(--accent-cyan); }
+
+.stat-card--relay {
+    border-color: rgba(0, 229, 160, 0.3);
+    background: linear-gradient(135deg, var(--bg-card) 0%, rgba(0, 229, 160, 0.06) 100%);
+}
+
+.stat-card--relay:hover { border-color: var(--accent-green); }
+.stat-card--relay .stat-card__value { color: var(--accent-green); }
+
+.stat-card--system {
+    border-color: rgba(6, 182, 212, 0.2);
+    background: linear-gradient(135deg, var(--bg-card) 0%, rgba(6, 182, 212, 0.04) 100%);
+}
+
+.stat-card--system:hover { border-color: var(--accent-cyan); }
+
+.stat-card__label {
+    font-size: 0.6rem;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
+    margin-bottom: 0.1rem;
+    white-space: nowrap;
+}
+
+.stat-card__value {
+    font-size: 1.1rem;
+    font-weight: 700;
+    font-family: var(--font-mono);
+    color: var(--accent-cyan);
+    white-space: nowrap;
+}
+
+.stat-card__sub {
+    font-size: 0.55rem;
+    font-family: var(--font-mono);
+    color: var(--text-muted);
+    margin-top: 0.1rem;
+    white-space: nowrap;
+}
+
+/* ---- Dashboard Layout ---- */
+.dashboard {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    padding: 0.5rem;
+    height: 100%;
+    overflow: hidden;
+    flex: 1;
+    min-height: 0;
+}
+
+.dashboard__main {
+    display: grid;
+    grid-template-columns: 2fr 1fr;
+    gap: 0.5rem;
+    flex: 1;
+    min-height: 0;
+}
+
+.dashboard__feed { flex-shrink: 0; height: 220px; }
+
+/* ---- Panel ---- */
+.panel {
+    background: var(--bg-glass);
+    backdrop-filter: blur(12px);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    height: 100%;
+    transition: border-color 0.2s;
+}
+
+.panel:hover { border-color: var(--border-glow); }
+
+.panel__header {
+    padding: 0.5rem 0.75rem;
+    font-size: 0.7rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.panel__body {
+    flex: 1;
+    overflow: auto;
+    position: relative;
+}
+
+/* ---- Map ---- */
+/*
+ * Map zero-scrollbar invariant: Leaflet's zoom transitions briefly
+ * push the inner tile pane outside the container bounds. Without
+ * overflow:hidden cascading down, those overshoots flash horizontal
+ * and vertical scrollbars in Chrome and Firefox at every zoom step.
+ * Locking overflow on each layer (panel body, map container, leaflet
+ * container) hides the overshoot during the transition window.
+ */
+.dashboard__map { min-height: 0; overflow: hidden; }
+.dashboard__side { min-height: 0; overflow: hidden; }
+.map-container { min-height: 0; overflow: hidden; }
+
+#map {
+    height: 100%;
+    width: 100%;
+    overflow: hidden;
+}
+
+.leaflet-container {
+    overflow: hidden !important;
+}
+
+.leaflet-control-layers {
+    background: var(--bg-card) !important;
+    border: 1px solid var(--border) !important;
+    border-radius: var(--radius) !important;
+    color: var(--text-secondary) !important;
+    font-size: 0.75rem !important;
+}
+
+/* ---- Cluster overrides ---- */
+.marker-cluster div {
+    width: 30px; height: 30px;
+    margin-left: 5px; margin-top: 5px;
+    text-align: center; border-radius: 15px;
+    font: 12px var(--font-sans); font-weight: 600; color: #fff;
+}
+.marker-cluster span { line-height: 30px; }
+.marker-cluster-small { background: rgba(6, 182, 212, 0.3); }
+.marker-cluster-small div { background: rgba(6, 182, 212, 0.7); }
+.marker-cluster-medium { background: rgba(168, 85, 247, 0.3); }
+.marker-cluster-medium div { background: rgba(168, 85, 247, 0.7); }
+.marker-cluster-large { background: rgba(0, 229, 160, 0.3); }
+.marker-cluster-large div { background: rgba(0, 229, 160, 0.7); }
+
+.device-marker {
+    width: 16px;
+    height: 16px;
+    background: var(--accent-green);
+    border: 2px solid #fff;
+    border-radius: 3px;
+    transform: rotate(45deg);
+    box-shadow: 0 0 10px var(--accent-green), 0 0 20px rgba(0, 229, 160, 0.3);
+}
+
+/* MeshCore node marker (Meshtastic uses circleMarker; diamond visually
+   distinguishes the two protocols on the local map per Kaylee's
+   request, Discord May 2026). */
+.node-marker__diamond {
+    width: 10px;
+    height: 10px;
+    background: #a855f7;
+    border: 1px solid #a855f7;
+    border-radius: 2px;
+    transform: rotate(45deg);
+    opacity: 0.85;
+}
+
+.node-marker__diamond--fav {
+    border-color: #f59e0b;
+    border-width: 2px;
+    opacity: 1;
+}
+
+.node-marker__diamond--recent {
+    border-color: #00ff88;
+    border-width: 2px;
+    animation: pulseRing 1.5s ease-out infinite;
+}
+
+.packet-line {
+    filter: drop-shadow(0 0 4px rgba(0, 229, 160, 0.6));
+}
+
+@keyframes pulseRing {
+    0% { box-shadow: 0 0 0 0 rgba(6, 182, 212, 0.5); }
+    70% { box-shadow: 0 0 0 8px rgba(6, 182, 212, 0); }
+    100% { box-shadow: 0 0 0 0 rgba(6, 182, 212, 0); }
+}
+
+.node-pulse { animation: pulseRing 1.5s ease-out infinite; }
+
+/* ---- Node List ---- */
+.node-search {
+    background: var(--bg-primary);
+    color: var(--text-primary);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 0.2rem 0.5rem;
+    font-size: 0.7rem;
+    outline: none;
+    width: 120px;
+}
+
+.node-search:focus { border-color: var(--accent-cyan); }
+
+.node-item {
+    padding: 0.5rem 0.75rem;
+    border-bottom: 1px solid rgba(35, 48, 73, 0.4);
+    cursor: pointer;
+    transition: background 0.15s;
+}
+
+.node-item:hover { background: rgba(6, 182, 212, 0.06); }
+
+.node-item__top, .node-item__bottom {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.node-item__top { margin-bottom: 0.2rem; }
+
+.node-item__name {
+    font-weight: 500;
+    font-size: 0.8rem;
+    color: var(--text-primary);
+}
+
+.node-item__ago {
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+    color: var(--accent-cyan);
+    font-weight: 600;
+}
+
+.node-item__rssi {
+    font-family: var(--font-mono);
+    font-size: 0.7rem;
+    color: var(--text-muted);
+}
+
+.node-item__proto {
+    font-size: 0.6rem;
+    font-weight: 600;
+    padding: 0.1rem 0.3rem;
+    border-radius: 3px;
+}
+
+.node-item__proto--meshtastic {
+    background: rgba(59, 130, 246, 0.15);
+    color: var(--accent-blue);
+}
+
+.node-item__proto--meshcore {
+    background: rgba(168, 85, 247, 0.15);
+    color: var(--accent-purple);
+}
+
+/* ---- Packet Table ---- */
+.packet-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.78rem;
+    font-family: var(--font-mono);
+}
+
+.packet-table thead th {
+    position: sticky;
+    top: 0;
+    z-index: 2;
+    background-color: var(--bg-secondary);
+    padding: 0.5rem 0.6rem;
+    text-align: left;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    font-size: 0.7rem;
+    letter-spacing: 0.04em;
+    border-bottom: 1px solid var(--border);
+    box-shadow: 0 1px 0 var(--border);
+}
+
+.packet-table tbody tr {
+    border-bottom: 1px solid var(--border);
+    transition: background 0.15s;
+}
+
+.packet-table tbody tr:hover { background: var(--bg-card-hover, rgba(6, 182, 212, 0.04)); }
+
+.packet-table td {
+    padding: 0.4rem 0.6rem;
+    white-space: nowrap;
+    color: var(--text-secondary);
+}
+
+.packet-table td.type-text { color: var(--accent-green); }
+.packet-table td.type-position { color: var(--accent-amber); }
+.packet-table td.type-telemetry { color: var(--accent-cyan); }
+.packet-table td.type-nodeinfo { color: var(--accent-purple); }
+.packet-table td.type-encrypted { color: var(--accent-red); }
+.packet-table td.type-routing { color: var(--text-muted); }
+.packet-table td.type-traceroute { color: var(--accent-blue); }
+.packet-table td.type-neighborinfo { color: var(--accent-blue); }
+
+.packet-table td.protocol-meshtastic { color: var(--accent-blue); }
+.packet-table td.protocol-meshcore { color: var(--accent-purple); }
+
+.packet-table td.rssi-good { color: var(--accent-green); }
+.packet-table td.rssi-mid { color: var(--accent-amber); }
+.packet-table td.rssi-bad { color: var(--accent-red); }
+
+.packet-table td.td-source {
+    color: var(--accent-cyan);
+}
+
+.relay-hop {
+    color: var(--accent-amber);
+    font-size: 0.85em;
+    opacity: 0.85;
+}
+
+.packet-details-cell {
+    max-width: 280px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    font-size: 0.72rem;
+    opacity: 0.85;
+}
+
+.packet-row { cursor: pointer; }
+
+.packet-detail-row td {
+    padding: 0.5rem 0.75rem !important;
+    font-size: 0.7rem;
+    font-family: var(--font-mono);
+    color: var(--text-secondary);
+    white-space: pre-wrap;
+    word-break: break-word;
+    background: var(--bg-secondary);
+}
+
+.packet-count {
+    background: rgba(6, 182, 212, 0.15);
+    color: var(--accent-cyan);
+    font-family: var(--font-mono);
+    font-size: 0.65rem;
+    font-weight: 600;
+    padding: 0.1rem 0.4rem;
+    border-radius: 8px;
+}
+
+@keyframes packetFlash {
+    0% { background: rgba(6, 182, 212, 0.1); }
+    100% { background: transparent; }
+}
+
+.packet-row--new { animation: packetFlash 1s ease-out; }
+
+/* Responsive overrides for this file live in css/responsive.css. */
