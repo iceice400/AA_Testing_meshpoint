@@ -247,7 +247,7 @@ html, body {
  */
 .dashboard__map { min-height: 0; overflow: hidden; }
 .dashboard__side { min-height: 0; overflow: hidden; }
-.map-container { min-height: 0; overflow: hidden; }
+.map-container { min-height: 0; overflow: hidden; position: relative; }
 
 #map {
     height: 100%;

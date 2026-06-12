@@ -47,6 +47,7 @@ class NodeMap {
 
         this._topologyLayer = L.layerGroup();
         this._topologyVisible = false;
+        this._topologyHintEl = null;
         this._coverageLayer = L.layerGroup();
         this._coverageVisible = false;
         this._focusLine = null;
@@ -70,6 +71,14 @@ class NodeMap {
         });
         this._map.addLayer(this._markerGroup);
 
+        this._topologyHintEl = document.createElement('div');
+        this._topologyHintEl.className = 'map-topology-hint';
+        this._topologyHintEl.hidden = true;
+        this._topologyHintEl.setAttribute('role', 'status');
+        this._topologyHintEl.textContent =
+            'Topology links need GPS on both nodes — open the Topology tab for the logical graph.';
+        el.appendChild(this._topologyHintEl);
+
         const overlays = {
             'Topology Links': this._topologyLayer,
             'Coverage circles': this._coverageLayer,
@@ -89,6 +98,9 @@ class NodeMap {
         this._map.on('overlayremove', (e) => {
             if (e.layer === this._topologyLayer) {
                 this._topologyVisible = false;
+                if (this._topologyHintEl) {
+                    this._topologyHintEl.hidden = true;
+                }
             }
             if (e.layer === this._coverageLayer) {
                 this._coverageVisible = false;
@@ -478,10 +490,12 @@ class NodeMap {
                 : (payload.edges || []);
             this._topologyLayer.clearLayers();
 
+            let drawn = 0;
             for (const link of links) {
                 const srcMarker = this._markers[link.source];
                 const tgtMarker = this._markers[link.target];
                 if (!srcMarker || !tgtMarker) continue;
+                drawn += 1;
 
                 const line = L.polyline(
                     [srcMarker.getLatLng(), tgtMarker.getLatLng()],
@@ -503,9 +517,17 @@ class NodeMap {
 
                 this._topologyLayer.addLayer(line);
             }
+
+            this._updateTopologyHint(links.length, drawn);
         } catch (e) {
             console.error('Topology load failed:', e);
         }
+    }
+
+    _updateTopologyHint(totalLinks, drawnLinks) {
+        if (!this._topologyHintEl) return;
+        const show = this._topologyVisible && totalLinks > 0 && drawnLinks === 0;
+        this._topologyHintEl.hidden = !show;
     }
 
     _esc(str) {

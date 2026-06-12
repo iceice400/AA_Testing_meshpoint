@@ -73,12 +73,15 @@ class StatsTab {
         this._heatmap = null;
         this._hourlyRegion = null;
         this._rendered = false;
+        this._statusStrip = null;
+        this._fetchedAt = null;
     }
 
     async refresh() {
         try {
             const res = await fetch('/api/stats/summary');
             const data = await res.json();
+            this._fetchedAt = Date.now();
             if (!this._rendered) {
                 this._buildLayout();
                 this._rendered = true;
@@ -314,11 +317,18 @@ class StatsTab {
                 </div>
             </section>
 
+            <div id="stats-status-strip-host"></div>
         </div>`;
 
         const heatmapHost = document.getElementById('stats-heatmap-host');
         if (heatmapHost && window.TrafficHeatmap) {
             this._heatmap = new window.TrafficHeatmap(heatmapHost);
+        }
+
+        const stripHost = document.getElementById('stats-status-strip-host');
+        if (stripHost && window.StatusStrip) {
+            this._statusStrip = new window.StatusStrip(stripHost, 'TRAFFIC');
+            this._statusStrip.mount();
         }
     }
 
@@ -354,6 +364,21 @@ class StatsTab {
         this._updateTimeline(data.traffic_timeline || {});
         this._updateRelay(data.relay || {});
         this._updateRejectReasons(data.relay || {});
+        this._updateStatusStrip(device, traffic, live);
+    }
+
+    _updateStatusStrip(device, traffic, live) {
+        if (!this._statusStrip) return;
+        const pkts = traffic.total_packets ?? live.total_packets ?? 0;
+        const rate = traffic.packets_per_minute ?? live.packets_per_minute;
+        const items = [
+            device.name || 'concentrator',
+            `${Number(pkts).toLocaleString()} pkts`,
+        ];
+        if (rate) {
+            items.push(`${rate}/min`);
+        }
+        this._statusStrip.update(items, this._fetchedAt);
     }
 
     _setText(id, value) {
