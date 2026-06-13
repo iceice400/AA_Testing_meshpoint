@@ -265,17 +265,49 @@ class NodeMap {
     }
 
     _lookupNodeCoords(id) {
+        if (this._store?.getNodeCoords) {
+            const stored = this._store.getNodeCoords(id);
+            if (stored) return stored;
+        }
         const mesh = this._lastNodes?.find(
             (n) => _normNodeId(n.node_id || n.id) === id,
         );
         if (mesh && _isValidGps(mesh.latitude, mesh.longitude)) {
             return { lat: Number(mesh.latitude), lng: Number(mesh.longitude) };
         }
-        if (this._store?.getNodeCoords) {
-            const stored = this._store.getNodeCoords(id);
-            if (stored) return stored;
-        }
         return null;
+    }
+
+    _ensureMarkersPlotted(nodes) {
+        for (const n of nodes || []) {
+            const id = _normNodeId(n.node_id || n.id);
+            if (!id || this._markers[id]) continue;
+            const lat = n.latitude ?? n.lat;
+            const lon = n.longitude ?? n.lng;
+            if (!_isValidGps(lat, lon)) continue;
+            this._addNodeMarker({ ...n, latitude: lat, longitude: lon });
+        }
+    }
+
+    refitToMarkers() {
+        if (!this._map) return;
+        const bounds = [];
+        if (this._deviceMarker) {
+            bounds.push(this._deviceMarker.getLatLng());
+        }
+        for (const marker of Object.values(this._markers)) {
+            bounds.push(marker.getLatLng());
+        }
+        for (const stub of this._darkStubMarkers.values()) {
+            bounds.push(stub.getLatLng());
+        }
+        if (!bounds.length) return;
+        if (bounds.length > 1) {
+            this._map.fitBounds(L.latLngBounds(bounds), { padding: [40, 40], maxZoom: 14 });
+        } else {
+            this._map.setView(bounds[0], 13);
+        }
+        this._hasFitBounds = true;
     }
 
     _buildMapChrome() {
@@ -433,6 +465,7 @@ class NodeMap {
             this._setCoverageVisible(true);
         }
 
+        this._ensureMarkersPlotted(this._store.getPlottedMeshNodes?.() || []);
         this._renderDarkStubs(snap.unplotted, snap.estimates || [], showDark);
         this._renderEdges(snap.edges, showEdges, mode);
         this._renderRoutePaths(snap.routes, showEdges && mode !== 'coverage');

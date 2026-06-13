@@ -211,6 +211,9 @@ class TopologyTab {
             if (event.detail?.route !== 'topology') return;
             if (this._liveRefreshTimer) clearInterval(this._liveRefreshTimer);
             this._liveRefreshTimer = setInterval(() => this.refresh(), 60_000);
+            setTimeout(() => {
+                if (this._viewMode === 'map') this._ensureTopoMap();
+            }, 100);
         });
 
         window.addEventListener('resize', () => {
@@ -416,9 +419,16 @@ class TopologyTab {
             });
         }
         this._topoMap.setLocalNodeId(this._localMeshNodeId);
-        this._topoMap.loadNodes(this._filterActiveNodes(this._meshNodes), this._device);
+        this._topoMap.loadNodes(this._meshNodes, this._device);
         this._topoMap.renderTopology();
-        setTimeout(() => this._topoMap?._map?.invalidateSize(), 150);
+        const refit = () => {
+            this._topoMap?._map?.invalidateSize();
+            if (this._topoMap && Object.keys(this._topoMap._markers || {}).length) {
+                this._topoMap.refitToMarkers();
+            }
+        };
+        setTimeout(refit, 150);
+        setTimeout(refit, 500);
     }
 
     _filterActiveNodes(nodes) {

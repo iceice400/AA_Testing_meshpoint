@@ -114,6 +114,17 @@
             return null;
         }
 
+        /** Mesh nodes with valid GPS for map plotting. */
+        getPlottedMeshNodes() {
+            const out = [];
+            for (const n of this._meshNodes.values()) {
+                if (_coordsValid(n.latitude, n.longitude)) {
+                    out.push(n);
+                }
+            }
+            return out;
+        }
+
         /** Mesh nodes from GET /api/nodes — GPS, names, roles. */
         syncMeshNodes(nodes) {
             this._meshNodes.clear();
