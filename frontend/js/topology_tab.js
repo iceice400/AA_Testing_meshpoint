@@ -30,7 +30,23 @@ class TopologyTab {
     }
 
     async refresh() {
-        if (!this._container || typeof d3 === 'undefined') return;
+        if (!this._container) return;
+
+        if (!this._rendered) {
+            this._buildLayout();
+            this._rendered = true;
+            this._setViewMode(this._viewMode);
+        }
+
+        if (typeof d3 === 'undefined') {
+            this._setLoading(false);
+            if (this._emptyEl) {
+                this._emptyEl.hidden = false;
+                this._emptyEl.textContent =
+                    'Graph library failed to load. Check network access and refresh.';
+            }
+            return;
+        }
 
         this._setLoading(true);
         try {
@@ -42,11 +58,7 @@ class TopologyTab {
                 window.topologyStore.setHours(this._hours);
                 window.topologyStore.loadFromApi(this._graph);
             }
-            if (!this._rendered) {
-                this._buildLayout();
-                this._rendered = true;
-            }
-            this._renderGraph();
+            await this._renderGraphWhenReady();
             this._updateSidebarStats();
             this._mountDock();
             if (this._viewMode === 'map') {
@@ -59,10 +71,24 @@ class TopologyTab {
         }
     }
 
+    _renderGraphWhenReady() {
+        return new Promise((resolve) => {
+            requestAnimationFrame(() => {
+                requestAnimationFrame(() => {
+                    this._renderGraph();
+                    resolve();
+                });
+            });
+        });
+    }
+
     _setLoading(on) {
         this._loading = on;
         const el = document.getElementById('topo-loading');
-        if (el) el.hidden = !on;
+        if (el) {
+            el.hidden = !on;
+            el.classList.toggle('topo-loading--visible', on);
+        }
     }
 
     _buildLayout() {
@@ -211,7 +237,7 @@ class TopologyTab {
                             <button type="button" class="topo-view-tab" data-view="map" role="tab" aria-selected="false">Map</button>
                         </div>
                     </div>
-                    <div class="topo-view topo-view--graph" id="topo-view-graph">
+                    <div class="topo-view topo-view--graph topo-view--active" id="topo-view-graph">
                         <div class="topo-canvas-wrap">
                             <div id="topo-loading" class="topo-loading" hidden>Building network graph…</div>
                             <svg id="topo-svg" class="topo-svg" aria-label="Mesh topology graph"></svg>
@@ -347,9 +373,18 @@ class TopologyTab {
         const graphView = document.getElementById('topo-view-graph');
         const mapView = document.getElementById('topo-view-map');
         const mapStatus = document.getElementById('topo-map-status-host');
-        if (graphView) graphView.hidden = this._viewMode !== 'graph';
-        if (mapView) mapView.hidden = this._viewMode !== 'map';
-        if (mapStatus) mapStatus.hidden = this._viewMode !== 'map';
+        const isGraph = this._viewMode === 'graph';
+        const isMap = this._viewMode === 'map';
+
+        if (graphView) {
+            graphView.hidden = !isGraph;
+            graphView.classList.toggle('topo-view--active', isGraph);
+        }
+        if (mapView) {
+            mapView.hidden = !isMap;
+            mapView.classList.toggle('topo-view--active', isMap);
+        }
+        if (mapStatus) mapStatus.hidden = !isMap;
 
         this._container.querySelectorAll('[data-view]').forEach((btn) => {
             const active = btn.dataset.view === this._viewMode;
@@ -357,10 +392,10 @@ class TopologyTab {
             btn.setAttribute('aria-selected', active ? 'true' : 'false');
         });
 
-        if (this._viewMode === 'map') {
+        if (isMap) {
             this._ensureTopoMap();
         } else if (this._rendered) {
-            this._renderGraph();
+            this._renderGraphWhenReady();
         }
     }
 
@@ -630,8 +665,10 @@ class TopologyTab {
 
     _renderGraph() {
         const wrap = this._container.querySelector('.topo-canvas-wrap');
-        const width = wrap.clientWidth || 800;
-        const height = wrap.clientHeight || 520;
+        if (!wrap || !this._svg) return;
+
+        const width = Math.max(wrap.clientWidth, 320);
+        const height = Math.max(wrap.clientHeight, 320);
 
         const accentCyan = this._cssToken('--accent-cyan', '#06b6d4');
         const accentPurple = this._cssToken('--accent-purple', '#a855f7');

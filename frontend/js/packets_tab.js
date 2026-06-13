@@ -27,17 +27,31 @@ class PacketsTab {
             secOnly: false,
             newOnly: false,
         };
+
+        if (this._container && !this._container.querySelector('.packets-workspace')) {
+            this._container.innerHTML =
+                '<div class="packets-panel__loading">Loading packet browser…</div>';
+        }
     }
 
     async refresh() {
         if (!this._container) return;
-        if (!this._rendered) {
-            this._buildLayout();
-            this._rendered = true;
+
+        try {
+            if (!this._rendered) {
+                this._buildLayout();
+                this._rendered = true;
+            }
+            await this._loadHistory();
+            this._applyFilters();
+            this._render();
+        } catch (e) {
+            console.error('Packets tab refresh failed:', e);
+            if (!this._rendered) {
+                this._container.innerHTML =
+                    '<div class="packets-panel__loading">Failed to load packet browser. Refresh the page.</div>';
+            }
         }
-        await this._loadHistory();
-        this._applyFilters();
-        this._render();
     }
 
     ingestPacket(raw) {
