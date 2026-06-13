@@ -102,6 +102,13 @@ def enrich_config_payload(cfg: AppConfig, base: dict) -> dict:
         "max_retained": cfg.stray_frames.max_retained,
         "retention_hours": cfg.stray_frames.retention_hours,
     }
+    topo = cfg.topology
+    base["topology"] = {
+        "poll_enabled": topo.poll_enabled,
+        "poll_interval_minutes": topo.poll_interval_minutes,
+        "max_polls_per_cycle": topo.max_polls_per_cycle,
+        "infer_dark_positions": topo.infer_dark_positions,
+    }
     pos = cfg.transmit.position
     if "transmit" in base:
         base["transmit"]["position"] = {

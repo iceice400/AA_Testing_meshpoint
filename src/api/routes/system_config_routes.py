@@ -12,7 +12,7 @@ from src.api.audit import AuditLogWriter
 from src.api.audit.dependencies import get_audit_writer
 from src.api.auth.dependencies import require_admin
 from src.api.auth.jwt_session import SessionClaims
-from src.config import AppConfig, save_section_to_yaml
+from src.config import AppConfig, save_section_to_yaml, _validate_gps_pps_config
 from src.relay.channel_budget import normalize_channel_throttle
 from src.relay.node_id import validate_node_ids
 from src.relay.relay_manager import RelayManager
@@ -79,6 +79,15 @@ class RelayUpdate(BaseModel):
 class RadioAdvancedUpdate(BaseModel):
     spectral_scan_interval_seconds: Optional[float] = Field(None, ge=0, le=3600)
     sx1261_spi_path: Optional[str] = None
+    gps_pps_enabled: Optional[bool] = None
+    gps_pps_tty_path: Optional[str] = None
+
+
+class TopologyUpdate(BaseModel):
+    poll_enabled: Optional[bool] = None
+    poll_interval_minutes: Optional[int] = Field(None, ge=1, le=1440)
+    max_polls_per_cycle: Optional[int] = Field(None, ge=1, le=100)
+    infer_dark_positions: Optional[bool] = None
 
 
 @router.put("/storage")
@@ -340,15 +349,72 @@ async def update_radio_advanced(
         radio.sx1261_spi_path = path
         updates["sx1261_spi_path"] = path
         restart_needed = True
+    if req.gps_pps_enabled is not None:
+        radio.gps_pps_enabled = req.gps_pps_enabled
+        updates["gps_pps_enabled"] = req.gps_pps_enabled
+        restart_needed = True
+    if req.gps_pps_tty_path is not None:
+        path = req.gps_pps_tty_path.strip() or "/dev/ttyAMA0"
+        radio.gps_pps_tty_path = path
+        updates["gps_pps_tty_path"] = path
+        restart_needed = True
 
     if not updates:
         return {"saved": False, "restart_required": False}
+
+    try:
+        _validate_gps_pps_config(_config)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     with audit.timed_action(
         user=_claims.subject, action="config.radio_advanced_update", params=updates
     ):
         try:
             save_section_to_yaml("radio", updates)
+        except PermissionError as exc:
+            raise HTTPException(403, str(exc)) from exc
+
+    return {"saved": True, "restart_required": restart_needed, "updates": updates}
+
+
+@router.put("/topology")
+async def update_topology(
+    req: TopologyUpdate,
+    _claims: SessionClaims = Depends(require_admin),
+    audit: AuditLogWriter = Depends(get_audit_writer),
+):
+    if _config is None:
+        raise HTTPException(503, "Config not loaded")
+
+    updates: dict = {}
+    topo = _config.topology
+    restart_needed = False
+
+    if req.poll_enabled is not None:
+        topo.poll_enabled = req.poll_enabled
+        updates["poll_enabled"] = req.poll_enabled
+        restart_needed = True
+    if req.poll_interval_minutes is not None:
+        topo.poll_interval_minutes = req.poll_interval_minutes
+        updates["poll_interval_minutes"] = req.poll_interval_minutes
+        restart_needed = True
+    if req.max_polls_per_cycle is not None:
+        topo.max_polls_per_cycle = req.max_polls_per_cycle
+        updates["max_polls_per_cycle"] = req.max_polls_per_cycle
+        restart_needed = True
+    if req.infer_dark_positions is not None:
+        topo.infer_dark_positions = req.infer_dark_positions
+        updates["infer_dark_positions"] = req.infer_dark_positions
+
+    if not updates:
+        return {"saved": False, "restart_required": False}
+
+    with audit.timed_action(
+        user=_claims.subject, action="config.topology_update", params=updates
+    ):
+        try:
+            save_section_to_yaml("topology", updates)
         except PermissionError as exc:
             raise HTTPException(403, str(exc)) from exc
 

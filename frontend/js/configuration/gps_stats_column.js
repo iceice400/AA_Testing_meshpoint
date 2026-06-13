@@ -166,7 +166,14 @@
             try {
                 const d = new Date(ts);
                 if (Number.isNaN(d.getTime())) return ts;
-                return d.toISOString().replace('T', ' ').slice(0, 19) + ' UTC';
+                return d.toLocaleString([], {
+                    year: 'numeric',
+                    month: 'short',
+                    day: 'numeric',
+                    hour: '2-digit',
+                    minute: '2-digit',
+                    second: '2-digit',
+                });
             } catch (e) {
                 return ts;
             }
