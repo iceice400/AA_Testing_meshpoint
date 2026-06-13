@@ -7,7 +7,6 @@
 class TopologyTab {
     constructor(containerId) {
         this._container = document.getElementById(containerId);
-        this._hours = this._settings.get('hours') || 24;
         this._rendered = false;
         this._viewMode = 'map';
         this._observer = this._detectObserver();
@@ -19,6 +18,7 @@ class TopologyTab {
         this._loading = false;
 
         this._settings = new TopologySettings();
+        this._hours = this._settings.get('hours') || 24;
         this._audio = new TopologyAudio(this._settings);
         this._poller = new SmartPoller({
             settings: this._settings,
@@ -462,4 +462,12 @@ class TopologyTab {
     }
 }
 
-window.topologyTab = new TopologyTab('topology-panel');
+try {
+    window.topologyTab = new TopologyTab('topology-panel');
+} catch (err) {
+    console.error('TopologyTab failed to initialize:', err);
+    const el = document.getElementById('topology-panel');
+    if (el) {
+        el.innerHTML = '<div class="topo-init-error">Topology failed to load. Hard refresh and check the browser console.</div>';
+    }
+}

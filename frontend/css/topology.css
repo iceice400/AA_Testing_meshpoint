@@ -1,3 +1,10 @@
+.topo-init-error {
+    padding: 1.5rem;
+    color: var(--accent-red);
+    font-family: var(--font-mono);
+    font-size: 0.75rem;
+}
+
 /* Topology tab — three-panel operator workspace (Meshpoint design tokens) */
 
 .section[data-section="topology"] {
