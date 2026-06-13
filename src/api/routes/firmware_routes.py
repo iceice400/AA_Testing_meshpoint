@@ -25,9 +25,11 @@ from src.api.auth.dependencies import require_admin
 from src.api.auth.jwt_session import ROLE_ADMIN, JwtSessionService, SessionClaims
 from src.api.auth.ws_guard import WS_AUTH_CLOSE_CODE, authenticate_websocket
 from src.firmware.catalog import (
+    assert_usb_companion_firmware,
     build_catalog_payload,
     download_firmware_artifact,
     get_board,
+    is_usb_companion_firmware,
     load_catalog_config,
     revision_for_board,
 )
@@ -169,6 +171,15 @@ async def fetch_catalog_firmware(
     if not artifact or not artifact.get("url"):
         detail = catalog.get("release_error") or "No firmware artifact for this board."
         raise HTTPException(status_code=503, detail=detail)
+    artifact_name = str(artifact.get("filename") or "")
+    if not is_usb_companion_firmware(artifact_name):
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                f"Catalog resolved a non-USB companion asset ({artifact_name}). "
+                "Only companion_radio_usb builds are allowed."
+            ),
+        )
 
     rev = revision_for_board(cfg, req.board_id, req.revision_id)
     try:
@@ -205,6 +216,10 @@ async def upload_firmware(
     filename = (firmware_file.filename or "").strip()
     if not filename.lower().endswith(".bin"):
         raise HTTPException(status_code=400, detail="Only .bin firmware files are accepted.")
+    try:
+        assert_usb_companion_firmware(filename)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     content = await firmware_file.read()
     if len(content) > MAX_UPLOAD_BYTES:

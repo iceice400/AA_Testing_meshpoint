@@ -25,11 +25,11 @@ class CompanionFlashCard {
         if (!this._host) return;
         this._host.innerHTML = `
             <article class="auth-card companion-flash-card" id="companion-flash-card">
-                <h3 class="auth-card__title">Flash companion firmware</h3>
+                <h3 class="auth-card__title">Flash MeshCore USB companion</h3>
                 <p class="auth-card__hint">
-                    Reflash the USB MeshCore companion <strong>on this Pi</strong> without
-                    unplugging it. For first-time setup with the radio on your laptop, use
-                    an external flasher below.
+                    Only <code>companion_radio_usb</code> images — USB serial companion
+                    firmware for capture on this Pi. BLE builds (<code>companion_radio_ble</code>)
+                    are not supported here.
                 </p>
 
                 <div class="companion-flash-external" data-fw-external></div>
@@ -39,10 +39,10 @@ class CompanionFlashCard {
                 </div>
 
                 <section class="companion-flash-section">
-                    <h4 class="companion-flash-section__title">Flash from catalog</h4>
+                    <h4 class="companion-flash-section__title">Flash USB companion from catalog</h4>
                     <p class="auth-card__hint">
-                        Picks the latest pinned MeshCore USB merged build for your board.
-                        Admin only; recorded in the audit log.
+                        Downloads the pinned MeshCore <strong>companion_radio_usb</strong> merged
+                        build for your board. Never BLE.
                     </p>
                     <label class="cfg-field">
                         <span class="cfg-field__label">Board</span>
@@ -85,7 +85,11 @@ class CompanionFlashCard {
                 </section>
 
                 <details class="companion-flash-manual">
-                    <summary>Manual .bin upload</summary>
+                    <summary>Manual .bin upload (companion_radio_usb only)</summary>
+                    <p class="auth-card__hint">
+                        Filename must include <code>companion_radio_usb</code>.
+                        BLE and Meshtastic images are rejected.
+                    </p>
                     <label class="cfg-field">
                         <span class="cfg-field__label">Firmware file (.bin)</span>
                         <input class="cfg-field__input" type="file" accept=".bin,application/octet-stream"
@@ -433,6 +437,25 @@ class CompanionFlashCard {
         if (!file) return;
         if (!file.name.toLowerCase().endsWith('.bin')) {
             this._setUploadStatus('error', 'Only .bin files are accepted.');
+            this._uploadId = null;
+            this._flashBtn.disabled = true;
+            return;
+        }
+        const lower = file.name.toLowerCase();
+        if (lower.includes('companion_radio_ble') || lower.includes('_ble-')) {
+            this._setUploadStatus(
+                'error',
+                'BLE companion firmware is not supported. Use companion_radio_usb only.',
+            );
+            this._uploadId = null;
+            this._flashBtn.disabled = true;
+            return;
+        }
+        if (!lower.includes('companion_radio_usb')) {
+            this._setUploadStatus(
+                'error',
+                'Filename must include companion_radio_usb (USB serial companion).',
+            );
             this._uploadId = null;
             this._flashBtn.disabled = true;
             return;

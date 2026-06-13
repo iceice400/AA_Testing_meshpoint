@@ -14,11 +14,13 @@ external_flashers:
   - id: meshcore_web
     label: MeshCore Web Flasher
     url: https://meshcore.io/flasher
-    hint: First-time setup when the radio is plugged into your laptop (Chrome/Edge).
+    hint: >
+      First-time setup on your laptop. Choose companion_radio_usb only —
+      not companion_radio_ble (BLE disables USB serial on MeshPoint).
   - id: meshtastic_web
     label: Meshtastic Web Flasher
     url: https://flasher.meshtastic.org/
-    hint: Meshtastic handheld nodes — not MeshCore USB companion firmware.
+    hint: Meshtastic handheld nodes only — not used for MeshCore USB companions.
 
 boards:
   - id: heltec_v3

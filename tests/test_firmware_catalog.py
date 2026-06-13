@@ -7,8 +7,10 @@ from unittest.mock import AsyncMock, patch
 
 from src.firmware.catalog import (
     _match_asset_name,
+    assert_usb_companion_firmware,
     build_catalog_payload,
     get_board,
+    is_usb_companion_firmware,
     load_catalog_config,
     revision_for_board,
 )
@@ -42,6 +44,38 @@ class TestFirmwareCatalog(unittest.TestCase):
         self.assertIsNotNone(hit)
         assert hit is not None
         self.assertIn("merged", hit["name"])
+
+    def test_match_asset_rejects_ble(self) -> None:
+        assets = [
+            {"name": "Heltec_v3_companion_radio_ble-v1.0-merged.bin"},
+            {"name": "Heltec_v3_companion_radio_usb-v1.0-merged.bin"},
+        ]
+        hit = _match_asset_name(
+            assets,
+            "Heltec_v3_companion_radio_usb",
+            prefer_merged=True,
+            variant="companion_radio_usb",
+        )
+        self.assertIsNotNone(hit)
+        assert hit is not None
+        self.assertIn("companion_radio_usb", hit["name"])
+
+    def test_is_usb_companion_firmware(self) -> None:
+        self.assertTrue(
+            is_usb_companion_firmware(
+                "Heltec_v3_companion_radio_usb-v1.16.0-merged.bin"
+            )
+        )
+        self.assertFalse(
+            is_usb_companion_firmware(
+                "Heltec_v3_companion_radio_ble-v1.16.0-merged.bin"
+            )
+        )
+
+    def test_assert_usb_companion_firmware_ble(self) -> None:
+        with self.assertRaises(ValueError) as ctx:
+            assert_usb_companion_firmware("Heltec_v3_companion_radio_ble-v1.0.bin")
+        self.assertIn("BLE", str(ctx.exception))
 
     def test_revision_warning_for_v4(self) -> None:
         cfg = load_catalog_config()

@@ -19,6 +19,36 @@ _CATALOG_PATH = Path(__file__).resolve().parents[2] / "config" / "firmware_catal
 _RELEASE_CACHE_TTL = 300.0
 _release_cache: dict[str, Any] = {"fetched_at": 0.0, "payload": None}
 
+# MeshPoint only flashes MeshCore **USB serial companion** firmware — never BLE.
+USB_COMPANION_VARIANT = "companion_radio_usb"
+_BLE_MARKERS = ("companion_radio_ble", "_companion_radio_ble")
+
+
+def is_usb_companion_firmware(name: str) -> bool:
+    """True when *name* looks like a MeshCore USB companion .bin (not BLE)."""
+    lower = (name or "").strip().lower()
+    if not lower.endswith(".bin"):
+        return False
+    if any(marker in lower for marker in _BLE_MARKERS):
+        return False
+    return USB_COMPANION_VARIANT in lower
+
+
+def assert_usb_companion_firmware(name: str) -> None:
+    """Raise ValueError if *name* is not an accepted USB companion image."""
+    lower = (name or "").strip().lower()
+    if any(marker in lower for marker in _BLE_MARKERS):
+        raise ValueError(
+            "BLE companion firmware cannot be flashed here. "
+            "MeshPoint requires companion_radio_usb (USB serial) images only."
+        )
+    if not is_usb_companion_firmware(name):
+        raise ValueError(
+            "Firmware filename must include companion_radio_usb. "
+            "MeshPoint only flashes MeshCore USB serial companion builds — not BLE, "
+            "not repeater/router, and not Meshtastic handset firmware."
+        )
+
 
 @dataclass(frozen=True)
 class BoardProfile:
@@ -62,11 +92,16 @@ def _board_profiles(cfg: dict[str, Any]) -> list[BoardProfile]:
             for r in (raw.get("revisions") or [])
             if isinstance(r, dict)
         )
+        asset_prefix = str(raw["asset_prefix"])
+        if USB_COMPANION_VARIANT not in asset_prefix:
+            raise ValueError(
+                f"Board {raw.get('id')}: asset_prefix must include {USB_COMPANION_VARIANT}"
+            )
         profiles.append(
             BoardProfile(
                 id=str(raw["id"]),
                 label=str(raw.get("label", raw["id"])),
-                asset_prefix=str(raw["asset_prefix"]),
+                asset_prefix=asset_prefix,
                 baud_rate=int(raw.get("baud_rate", 460800)),
                 partition_offset=str(raw.get("partition_offset", "0x10000")),
                 recommended=bool(raw.get("recommended")),
@@ -97,8 +132,8 @@ def _match_asset_name(
         for a in assets
         if isinstance(a, dict)
         and str(a.get("name", "")).startswith(prefix)
-        and variant in str(a.get("name", ""))
-        and str(a.get("name", "")).endswith(".bin")
+        and variant == USB_COMPANION_VARIANT
+        and is_usb_companion_firmware(str(a.get("name", "")))
     ]
     if not candidates:
         return None
@@ -141,7 +176,14 @@ async def build_catalog_payload(cfg: dict[str, Any] | None = None) -> dict[str, 
     repo = str(rel_cfg.get("github_repo", "meshcore-dev/MeshCore"))
     tag = str(rel_cfg.get("release_tag", "companion-v1.16.0"))
     prefer_merged = bool(rel_cfg.get("prefer_merged", True))
-    variant = str(rel_cfg.get("variant", "companion_radio_usb"))
+    variant = str(rel_cfg.get("variant", USB_COMPANION_VARIANT))
+    if variant != USB_COMPANION_VARIANT:
+        logger.warning(
+            "Catalog variant %r overridden to %s",
+            variant,
+            USB_COMPANION_VARIANT,
+        )
+        variant = USB_COMPANION_VARIANT
 
     release_error: str | None = None
     release_tag = tag
@@ -180,6 +222,7 @@ async def build_catalog_payload(cfg: dict[str, Any] | None = None) -> dict[str, 
                     "url": asset.get("browser_download_url"),
                     "size_bytes": asset.get("size"),
                     "merged": "merged" in str(asset.get("name", "")),
+                    "variant": USB_COMPANION_VARIANT,
                 }
         if board.recommended and recommended_id is None and entry.get("artifact"):
             recommended_id = board.id
@@ -190,9 +233,11 @@ async def build_catalog_payload(cfg: dict[str, Any] | None = None) -> dict[str, 
         "release_tag": release_tag,
         "release_error": release_error,
         "recommended_board_id": recommended_id,
+        "firmware_variant": USB_COMPANION_VARIANT,
         "external_flashers": list(cfg.get("external_flashers") or []),
         "boards": boards_out,
         "manual_upload": True,
+        "manual_upload_requires_usb_companion_name": True,
     }
 
 
@@ -207,6 +252,7 @@ async def download_firmware_artifact(
         async with client.stream("GET", url) as resp:
             resp.raise_for_status()
             filename = _filename_from_url(url, resp.headers.get("content-disposition"))
+            assert_usb_companion_firmware(filename)
             hasher = hashlib.sha256()
             size = 0
             tmp = tempfile.NamedTemporaryFile(
