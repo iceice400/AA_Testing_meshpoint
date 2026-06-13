@@ -25,6 +25,15 @@
         return Number.isFinite(t) ? t : Date.now();
     }
 
+    function _coordsValid(lat, lon) {
+        if (lat == null || lon == null) return false;
+        const la = Number(lat);
+        const lo = Number(lon);
+        if (!Number.isFinite(la) || !Number.isFinite(lo)) return false;
+        if (la === 0 && lo === 0) return false;
+        return la >= -90 && la <= 90 && lo >= -180 && lo <= 180;
+    }
+
     class TopologyStore {
         constructor(options = {}) {
             this.hours = options.hours ?? 24;
@@ -86,6 +95,23 @@
 
         get selectedNodeId() {
             return this._selectedNodeId;
+        }
+
+        getNodeCoords(nodeId) {
+            const id = normalizeNodeId(nodeId);
+            if (!id) return null;
+            const mesh = this._meshNodes.get(id);
+            if (mesh && _coordsValid(mesh.latitude, mesh.longitude)) {
+                return { lat: Number(mesh.latitude), lng: Number(mesh.longitude) };
+            }
+            const node = this._nodes.get(id);
+            if (node && _coordsValid(node.lat, node.lng)) {
+                return { lat: Number(node.lat), lng: Number(node.lng) };
+            }
+            if (node && _coordsValid(node.latitude, node.longitude)) {
+                return { lat: Number(node.latitude), lng: Number(node.longitude) };
+            }
+            return null;
         }
 
         /** Mesh nodes from GET /api/nodes — GPS, names, roles. */
@@ -185,7 +211,7 @@
         ingestPacket(packet) {
             if (!packet) return false;
             const type = (packet.packet_type || '').toLowerCase();
-            if (!['neighborinfo', 'traceroute', 'routing'].includes(type)) {
+            if (!['neighborinfo', 'traceroute', 'routing', 'position'].includes(type)) {
                 return false;
             }
 
@@ -193,15 +219,34 @@
             if (sourceId) {
                 this._knownNodeIds.add(sourceId);
                 const existing = this._nodes.get(sourceId) || { id: sourceId };
-                const mesh = this._meshNodes.get(sourceId);
+                const mesh = this._meshNodes.get(sourceId) || {};
+                const payload = packet.decoded_payload;
+                let lat = mesh.latitude ?? existing.lat ?? null;
+                let lng = mesh.longitude ?? existing.lng ?? null;
+                if (type === 'position' && payload && typeof payload === 'object') {
+                    const plat = payload.latitude ?? payload.adv_lat;
+                    const plng = payload.longitude ?? payload.adv_lon;
+                    if (_coordsValid(plat, plng)) {
+                        lat = plat;
+                        lng = plng;
+                        mesh.latitude = plat;
+                        mesh.longitude = plng;
+                        this._meshNodes.set(sourceId, { ...mesh, node_id: sourceId, id: sourceId });
+                    }
+                }
                 this._nodes.set(sourceId, {
                     ...existing,
                     id: sourceId,
                     latest_rssi: packet.rssi ?? packet.signal?.rssi ?? existing.latest_rssi,
-                    lat: mesh?.latitude ?? existing.lat ?? null,
-                    lng: mesh?.longitude ?? existing.lng ?? null,
+                    lat,
+                    lng,
                     role: mesh?.role || existing.role || 'CLIENT',
                 });
+            }
+
+            if (type === 'position') {
+                this._emit();
+                return true;
             }
 
             const payload = packet.decoded_payload;
@@ -324,9 +369,9 @@
             for (const id of this._knownNodeIds) {
                 const mesh = this._meshNodes.get(id);
                 const node = this._nodes.get(id) || {};
-                const lat = mesh?.latitude ?? node.lat;
-                const lng = mesh?.longitude ?? node.lng;
-                if (lat != null && lng != null) continue;
+                const lat = mesh?.latitude ?? node.lat ?? node.latitude;
+                const lng = mesh?.longitude ?? node.lng ?? node.longitude;
+                if (_coordsValid(lat, lng)) continue;
                 const edgeCount = [...this._edges.values()].filter(
                     (e) => e.nodeA === id || e.nodeB === id,
                 ).length;
@@ -347,7 +392,9 @@
             const nodes = [...this._nodes.values()];
             const mapped = nodes.filter((n) => {
                 const mesh = this._meshNodes.get(n.id);
-                return (mesh?.latitude ?? n.lat) != null && (mesh?.longitude ?? n.lng) != null;
+                const lat = mesh?.latitude ?? n.lat ?? n.latitude;
+                const lng = mesh?.longitude ?? n.lng ?? n.longitude;
+                return _coordsValid(lat, lng);
             }).length;
             const unplotted = this.getUnplotted();
             const poorEdges = edges.filter((e) => (e.rssi ?? 0) < RSSI_MED).length;

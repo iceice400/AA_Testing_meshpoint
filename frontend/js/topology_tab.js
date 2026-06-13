@@ -425,8 +425,9 @@ class TopologyTab {
         const inactMs = (this._settings.get('inactMin') || 60) * 60_000;
         const now = Date.now();
         return (nodes || []).filter((n) => {
-            if (!n.last_seen) return true;
-            const t = new Date(n.last_seen).getTime();
+            const heard = n.last_heard || n.last_seen;
+            if (!heard) return true;
+            const t = new Date(heard).getTime();
             return !Number.isFinite(t) || (now - t) <= inactMs;
         });
     }

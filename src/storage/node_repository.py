@@ -128,6 +128,18 @@ class NodeRepository:
                        ROW_NUMBER() OVER (PARTITION BY node_id ORDER BY timestamp DESC) AS rn
                 FROM telemetry
             ) t ON t.node_id = n.node_id AND t.rn = 1
+            LEFT JOIN (
+                SELECT source_id,
+                       CAST(json_extract(decoded_payload, '$.latitude') AS REAL) AS pos_lat,
+                       CAST(json_extract(decoded_payload, '$.longitude') AS REAL) AS pos_lon,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY source_id ORDER BY timestamp DESC
+                       ) AS pos_rn
+                FROM packets
+                WHERE packet_type = 'position'
+                  AND decoded_payload IS NOT NULL
+                  AND json_extract(decoded_payload, '$.latitude') IS NOT NULL
+            ) pos ON pos.source_id = n.node_id AND pos.pos_rn = 1
             ORDER BY n.last_heard DESC
             LIMIT ?
             """,
@@ -151,6 +163,14 @@ class NodeRepository:
         hop_start = row.get("latest_hop_start", 0) or 0
         hop_limit = row.get("latest_hop_limit", 0) or 0
         d["latest_hops"] = max(0, hop_start - hop_limit)
+        if d.get("latitude") is None and row.get("pos_lat") is not None:
+            lat = float(row["pos_lat"])
+            lon = float(row["pos_lon"]) if row.get("pos_lon") is not None else None
+            if lat != 0.0 or (lon is not None and lon != 0.0):
+                d["latitude"] = lat
+                if lon is not None:
+                    d["longitude"] = lon
+                d["has_position"] = lon is not None
         return d
 
     async def increment_packet_count(self, node_id: str) -> None:

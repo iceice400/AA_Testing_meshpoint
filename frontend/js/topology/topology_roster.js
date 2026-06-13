@@ -90,9 +90,11 @@
             }
 
             filtered.sort((a, b) => {
-                const ta = a.last_seen ? new Date(a.last_seen).getTime() : 0;
-                const tb = b.last_seen ? new Date(b.last_seen).getTime() : 0;
-                return tb - ta;
+                const ta = a.last_heard || a.last_seen;
+                const tb = b.last_heard || b.last_seen;
+                const tav = ta ? new Date(ta).getTime() : 0;
+                const tbv = tb ? new Date(tb).getTime() : 0;
+                return tbv - tav;
             });
 
             for (const n of filtered) {
@@ -104,7 +106,8 @@
             const id = n.node_id || n.id;
             const role = this._roleKey(n.role);
             const isDark = !n.latitude && !n.longitude;
-            const lastSeen = n.last_seen ? new Date(n.last_seen).getTime() : null;
+            const lastHeard = n.last_heard || n.last_seen;
+            const lastSeen = lastHeard ? new Date(lastHeard).getTime() : null;
             const inactive = lastSeen && (now - lastSeen) > inactMs;
 
             if (onlyActive && inactive) return false;
@@ -124,7 +127,8 @@
 
         _cardEl(n, now, inactMs) {
             const id = n.node_id || n.id;
-            const lastSeen = n.last_seen ? new Date(n.last_seen).getTime() : null;
+            const lastHeard = n.last_heard || n.last_seen;
+            const lastSeen = lastHeard ? new Date(lastHeard).getTime() : null;
             const inactive = lastSeen && (now - lastSeen) > inactMs;
             const isDark = !n.latitude && !n.longitude;
             const isStatic = this._poller?.isStatic(id);

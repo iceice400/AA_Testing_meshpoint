@@ -14,6 +14,15 @@ function _normNodeId(id) {
     return String(id).trim().toLowerCase().replace(/^!/, '');
 }
 
+function _isValidGps(lat, lon) {
+    if (lat == null || lon == null) return false;
+    const la = Number(lat);
+    const lo = Number(lon);
+    if (!Number.isFinite(la) || !Number.isFinite(lo)) return false;
+    if (la === 0 && lo === 0) return false;
+    return la >= -90 && la <= 90 && lo >= -180 && lo <= 180;
+}
+
 class NodeMap {
     constructor(containerId, options = {}) {
         this._containerId = containerId;
@@ -52,7 +61,6 @@ class NodeMap {
         const savedView = this._loadSavedView();
         if (savedView) {
             this._map.setView(savedView.center, savedView.zoom);
-            this._hasFitBounds = true;
         } else {
             this._map.setView(MAP_DEFAULT_CENTER, MAP_DEFAULT_ZOOM);
         }
@@ -180,7 +188,17 @@ class NodeMap {
             const links = Array.isArray(payload)
                 ? payload
                 : (payload.edges || []);
+
+            const unplotted = (payload.unplotted || []).map((u) => ({
+                id: u.id,
+                label: u.label || u.id,
+                edge_count: u.edge_count || 0,
+                latest_rssi: u.latest_rssi,
+            }));
+            this._renderDarkStubs(unplotted, payload.estimates || [], true);
+
             this._topologyLayer.clearLayers();
+            this._edgeLines?.clear?.();
 
             let drawn = 0;
             for (const link of links) {
@@ -218,6 +236,14 @@ class NodeMap {
         }
     }
 
+    refreshTopologyOverlay() {
+        if (this._topologyEnabled) {
+            this.renderTopology();
+        } else if (this._topologyVisible) {
+            this._loadTopology();
+        }
+    }
+
     setLocalNodeId(nodeId) {
         this._localNodeId = nodeId ? _normNodeId(nodeId) : null;
         if (this._topologyEnabled) this.renderTopology();
@@ -232,6 +258,22 @@ class NodeMap {
         if (stub) return stub.getLatLng();
         if (this._localNodeId && id === this._localNodeId && this._deviceMarker) {
             return this._deviceMarker.getLatLng();
+        }
+        const coords = this._lookupNodeCoords(id);
+        if (coords) return L.latLng(coords.lat, coords.lng);
+        return null;
+    }
+
+    _lookupNodeCoords(id) {
+        const mesh = this._lastNodes?.find(
+            (n) => _normNodeId(n.node_id || n.id) === id,
+        );
+        if (mesh && _isValidGps(mesh.latitude, mesh.longitude)) {
+            return { lat: Number(mesh.latitude), lng: Number(mesh.longitude) };
+        }
+        if (this._store?.getNodeCoords) {
+            const stored = this._store.getNodeCoords(id);
+            if (stored) return stored;
         }
         return null;
     }
@@ -356,7 +398,7 @@ class NodeMap {
         for (const n of mapNodes) {
             const lat = n.latitude;
             const lon = n.longitude;
-            if (lat == null || lon == null) continue;
+            if (!_isValidGps(lat, lon)) continue;
 
             bounds.push([lat, lon]);
             this._addNodeMarker(n);
@@ -880,7 +922,7 @@ class NodeMap {
         const type = (packet.packet_type || '').toLowerCase();
         const lat = payload.latitude ?? payload.adv_lat;
         const lon = payload.longitude ?? payload.adv_lon;
-        const hasCoords = lat != null && lon != null && !(lat === 0 && lon === 0);
+        const hasCoords = _isValidGps(lat, lon);
 
         if (!this._markers[sourceId] && hasCoords
             && (type === 'nodeinfo' || type === 'position')) {
@@ -895,14 +937,30 @@ class NodeMap {
             };
             this._addNodeMarker(node);
             if (Array.isArray(this._lastNodes)) {
-                this._lastNodes.push(node);
+                const idx = this._lastNodes.findIndex(
+                    (n) => _normNodeId(n.node_id || n.id) === sourceId,
+                );
+                if (idx >= 0) {
+                    this._lastNodes[idx] = { ...this._lastNodes[idx], ...node };
+                } else {
+                    this._lastNodes.push(node);
+                }
             } else {
                 this._lastNodes = [node];
             }
-            if (this._topologyEnabled) {
-                this.renderTopology();
-            }
+            this.refreshTopologyOverlay();
             return;
+        }
+
+        if (hasCoords && type === 'position') {
+            const mesh = this._lastNodes?.find(
+                (n) => _normNodeId(n.node_id || n.id) === sourceId,
+            );
+            if (mesh) {
+                mesh.latitude = lat;
+                mesh.longitude = lon;
+            }
+            this.refreshTopologyOverlay();
         }
 
         const marker = this._markers[sourceId];
