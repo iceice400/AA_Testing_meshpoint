@@ -270,6 +270,89 @@ See [docs/COMMON-ERRORS.md](docs/COMMON-ERRORS.md#upgrades) if the service fails
 
 **Upstream 401:** Bad API key. Get a free one at [meshradar.io](https://meshradar.io) and re-run `sudo meshpoint setup`.
 
+**On-board GPS (RAK2287 / SenseCap M1 / SX1303 HAT):** The concentrator chip handles LoRa only. The HAT's u-blox GPS is a **separate UART device** on the Pi (usually `/dev/ttyAMA0` after `install.sh` frees the port from Bluetooth). It does **not** appear over SPI.
+
+| Symptom | Likely cause | Fix |
+|---------|--------------|-----|
+| `GPS UART not available at /dev/ttyAMA0` | UART not wired/enabled, or wrong config | See steps below |
+| `sudo cat /dev/ttyAMA0` shows nothing | Bluetooth on primary UART, no antenna, or no sky view | `disable-bt` + `enable_uart=1`, reboot, connect GPS antenna outdoors |
+| Dashboard skyplot empty with `source: uart` | No NMEA yet, or port conflict | Confirm NMEA first; don't enable `radio.gps_pps_enabled` on the same TTY as `location.source: uart` |
+| USB GPS works but HAT GPS doesn't | Wrong source type | USB stick → `location.source: gpsd`. HAT UART → `location.source: uart` |
+
+**1. Confirm NMEA on the Pi (hardware first):**
+
+```bash
+grep -E 'uart|disable-bt' /boot/firmware/config.txt
+# Expect: dtoverlay=disable-bt  and  enable_uart=1  (install.sh adds these; reboot after first add)
+
+sudo stty -F /dev/ttyAMA0 9600 raw -echo
+timeout 15 sudo cat /dev/ttyAMA0
+# Expect: $GNGGA / $GNRMC lines streaming. Ctrl+C if it hangs with no output = no GPS data yet.
+
+sudo lsof /dev/ttyAMA0
+# If gpsd or meshpoint holds the port, only one consumer can use it at a time.
+```
+
+**2. MeshPoint config** (`/opt/meshpoint/config/local.yaml`) — pick **one** path:
+
+```yaml
+# Dashboard skyplot + live map coords from HAT GPS
+location:
+  source: uart
+  uart_path: "/dev/ttyAMA0"
+  uart_baud: 9600
+radio:
+  gps_pps_enabled: false
+```
+
+```yaml
+# Packet timestamp PPS sync (HAL) — do NOT also set location.source: uart on the same TTY
+location:
+  source: static   # or gpsd if you have a USB GPS for the dashboard
+radio:
+  gps_pps_enabled: true
+  gps_pps_tty_path: "/dev/ttyAMA0"
+```
+
+```yaml
+# USB GPS puck (u-blox) — recommended when not using the HAT UART
+location:
+  source: gpsd
+```
+
+Restart after changing `location.source`: `sudo systemctl restart meshpoint`.
+
+**3. Verify from the dashboard or API:**
+
+```bash
+curl -s -H "Authorization: Bearer YOUR_TOKEN" http://127.0.0.1:8080/api/device/gps-status | jq
+curl -s -H "Authorization: Bearer YOUR_TOKEN" http://127.0.0.1:8080/api/device/gps-pps-status | jq
+journalctl -u meshpoint -f | grep -i gps
+```
+
+Full option matrix: [Configuration > Location (GPS) source](docs/CONFIGURATION.md#location-gps-source).
+
+### Field testing (AA_Testing fork)
+
+To pull the latest integration branch from [iceice400/AA_Testing_meshpoint](https://github.com/iceice400/AA_Testing_meshpoint) on a Pi that already has Meshpoint installed:
+
+```bash
+cd /opt/meshpoint
+sudo git remote set-url origin https://github.com/iceice400/AA_Testing_meshpoint.git
+sudo bash scripts/pi_field_sync.sh
+```
+
+That script fetches `field/all-features`, preserves `config/local.yaml`, runs `install.sh`, and restarts the service. Reboot once after the first sync if `install.sh` added UART boot settings.
+
+To return to upstream stable later:
+
+```bash
+cd /opt/meshpoint
+sudo git remote set-url origin https://github.com/KMX415/meshpoint.git
+sudo git fetch origin && sudo git checkout main && sudo git pull origin main
+sudo bash scripts/install.sh && sudo systemctl restart meshpoint
+```
+
 ---
 
 ## Support and documentation
