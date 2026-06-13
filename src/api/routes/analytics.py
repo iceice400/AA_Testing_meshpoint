@@ -97,6 +97,10 @@ def _edge_key(a: str, b: str) -> str:
     return f"{min(a, b)}_{max(a, b)}"
 
 
+def _norm_nid(nid: str) -> str:
+    return (nid or "").strip().lower().lstrip("!")
+
+
 def _is_weak(rssi: float | None) -> bool:
     return rssi is not None and rssi < -110
 
@@ -113,7 +117,7 @@ async def _apply_node_metadata(nodes: dict[str, dict]) -> tuple[list[str], list[
 
     unplotted: list[str] = []
     for node in await _node_repo.get_all():
-        nid = node.node_id
+        nid = _norm_nid(node.node_id)
         if not nid:
             continue
         rec = nodes.get(nid)
@@ -244,11 +248,13 @@ async def network_topology(hours: int = Query(24, ge=1, le=168)):
         for node in await _node_repo.get_all():
             label = node.display_name or node.long_name or node.short_name
             if label:
-                name_by_id[node.node_id] = label
+                name_by_id[_norm_nid(node.node_id)] = label
 
     nodes: dict[str, dict] = {}
     for row in node_counts:
-        node_id = row["source_id"]
+        node_id = _norm_nid(row["source_id"])
+        if not node_id:
+            continue
         protocol = row.get("protocol") or "meshtastic"
         existing = nodes.get(node_id)
         count = int(row.get("packet_count") or 0)
@@ -285,7 +291,9 @@ async def network_topology(hours: int = Query(24, ge=1, le=168)):
         except (json.JSONDecodeError, TypeError):
             continue
 
-        source = row["source_id"]
+        source = _norm_nid(row["source_id"])
+        if not source:
+            continue
         rssi = row.get("rssi")
         snr = row.get("snr")
 
@@ -298,7 +306,9 @@ async def network_topology(hours: int = Query(24, ge=1, le=168)):
                 nid = neighbor.get("node_id") or neighbor.get("id")
                 if not nid:
                     continue
-                target = str(nid)
+                target = _norm_nid(str(nid))
+                if not target:
+                    continue
                 key = _edge_key(source, target)
                 if key not in edges:
                     edge_sources.add("neighborinfo")
@@ -318,7 +328,10 @@ async def network_topology(hours: int = Query(24, ge=1, le=168)):
             route = payload.get("route") or []
             if not isinstance(route, list) or len(route) < 2:
                 continue
-            route_ids = [str(node_id) for node_id in route]
+            route_ids = [_norm_nid(str(node_id)) for node_id in route]
+            route_ids = [rid for rid in route_ids if rid]
+            if len(route_ids) < 2:
+                continue
             routes.append({
                 "source_id": source,
                 "route": route_ids,
@@ -348,7 +361,10 @@ async def network_topology(hours: int = Query(24, ge=1, le=168)):
                 route = payload.get(field)
                 if not isinstance(route, list) or len(route) < 2:
                     continue
-                route_ids = [str(node_id) for node_id in route]
+                route_ids = [_norm_nid(str(node_id)) for node_id in route]
+                route_ids = [rid for rid in route_ids if rid]
+                if len(route_ids) < 2:
+                    continue
                 routes.append({
                     "source_id": source,
                     "route": route_ids,

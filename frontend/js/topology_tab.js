@@ -45,6 +45,9 @@ class TopologyTab {
         this._physics = { charge: -220, distance: 85, gravity: 0.08, frozen: false };
         this._centrality = {};
         this._statusStrip = null;
+        this._localMeshNodeId = null;
+        this._unsubStore = null;
+        this._liveRefreshTimer = null;
     }
 
     _detectObserver() {
@@ -71,11 +74,12 @@ class TopologyTab {
     }
 
     async _loadData() {
-        const [topoRes, nodesRes, deviceRes, statusRes] = await Promise.all([
+        const [topoRes, nodesRes, deviceRes, statusRes, configRes] = await Promise.all([
             fetch(`/api/analytics/topology?hours=${this._hours}`),
             fetch('/api/nodes?enrich=true'),
             fetch('/api/device'),
             fetch('/api/analytics/topology/status', { credentials: 'same-origin' }),
+            fetch('/api/config', { credentials: 'same-origin' }),
         ]);
         if (topoRes.ok) {
             this._graph = await topoRes.json();
@@ -100,6 +104,12 @@ class TopologyTab {
             this._poller?.setTxReady(txReady);
             this._topologyStatus = status;
             this._intel?.setTopologyStatus(status);
+        }
+        if (configRes.ok) {
+            const cfg = await configRes.json();
+            const hex = cfg.transmit?.node_id_hex || '';
+            this._localMeshNodeId = hex ? hex.replace(/^!/, '').toLowerCase() : null;
+            if (this._topoMap) this._topoMap.setLocalNodeId(this._localMeshNodeId);
         }
     }
 
@@ -189,6 +199,20 @@ class TopologyTab {
             ?.addEventListener('click', () => this._hideJsonModal());
         document.getElementById('topo-back-map')?.addEventListener('click', () => this._setViewMode('map'));
 
+        if (window.topologyStore && !this._unsubStore) {
+            this._unsubStore = window.topologyStore.onChange(() => {
+                if (this._viewMode === 'graph') this._renderGraph();
+                if (this._topoMap && this._viewMode === 'map') this._topoMap.renderTopology();
+                this._intel?.setSelectedNode(this._selectedNode);
+            });
+        }
+
+        document.addEventListener('sidebar:routeActivated', (event) => {
+            if (event.detail?.route !== 'topology') return;
+            if (this._liveRefreshTimer) clearInterval(this._liveRefreshTimer);
+            this._liveRefreshTimer = setInterval(() => this.refresh(), 60_000);
+        });
+
         window.addEventListener('resize', () => {
             if (this._viewMode === 'graph') this._renderGraph();
             if (this._topoMap?._map) setTimeout(() => this._topoMap._map.invalidateSize(), 120);
@@ -198,26 +222,34 @@ class TopologyTab {
     ingestPacket(packet) {
         const src = packet?.source_id;
         if (!src || !this._poller) return;
-        const node = this._meshNodes.find((n) => (n.node_id || n.id) === src)
-            || { node_id: src, id: src };
+        const srcNorm = src ? String(src).replace(/^!/, '').toLowerCase() : '';
+        const node = this._meshNodes.find(
+            (n) => String(n.node_id || n.id).replace(/^!/, '').toLowerCase() === srcNorm,
+        ) || { node_id: srcNorm || src, id: srcNorm || src };
         this._poller.notePacket(node, packet);
         if ((packet.packet_type || '').toLowerCase() === 'traceroute' && packet.decoded_payload) {
             const route = packet.decoded_payload.route || [];
-            const dest = route.length ? String(route[route.length - 1]) : src;
+            const dest = route.length
+                ? String(route[route.length - 1]).replace(/^!/, '').toLowerCase()
+                : (packet.source_id || '').replace(/^!/, '').toLowerCase();
             this._poller.recordTraceReply(dest, packet.decoded_payload);
             if (this._rendered) {
                 this._intel?.pushAlert({
                     type: 'route',
-                    node_id: src,
-                    node_name: src,
-                    message: `Traceroute reply → !${dest.slice(-4)}`,
+                    node_id: dest,
+                    node_name: dest,
+                    message: `Traceroute reply — ${route.length} hop(s).`,
                 });
-                const mesh = this._meshNodes.find((n) => (n.node_id || n.id) === dest);
+                const mesh = this._meshNodes.find(
+                    (n) => (n.node_id || n.id || '').replace(/^!/, '').toLowerCase() === dest,
+                );
                 if (mesh) {
-                    this._selectedNode = mesh;
-                    this._intel?.setSelectedNode(mesh);
+                    this._selectNode(mesh);
                 } else if (this._selectedNode) {
                     this._intel.setSelectedNode(this._selectedNode);
+                }
+                if (this._topoMap && this._viewMode === 'map') {
+                    this._topoMap.renderTopology();
                 }
             }
         }
@@ -380,9 +412,12 @@ class TopologyTab {
                 topology: true,
                 viewStorageKey: 'meshpoint.topoMap.view',
                 inactMin: this._settings.get('inactMin'),
+                localNodeId: this._localMeshNodeId,
             });
         }
+        this._topoMap.setLocalNodeId(this._localMeshNodeId);
         this._topoMap.loadNodes(this._filterActiveNodes(this._meshNodes), this._device);
+        this._topoMap.renderTopology();
         setTimeout(() => this._topoMap?._map?.invalidateSize(), 150);
     }
 
@@ -432,16 +467,23 @@ class TopologyTab {
         let nodes = (this._graph.nodes || []).map((n) => ({ ...n }));
 
         const sel = this._selectedNode?.node_id || this._selectedNode?.id;
-        if (sel) {
-            const connected = new Set([sel]);
+        const selNorm = sel ? String(sel).replace(/^!/, '').toLowerCase() : null;
+        if (selNorm) {
+            const connected = new Set([selNorm]);
             for (const e of edges) {
-                if (String(e.source) === sel || String(e.target) === sel) {
-                    connected.add(String(e.source));
-                    connected.add(String(e.target));
+                const a = String(e.source).replace(/^!/, '').toLowerCase();
+                const b = String(e.target).replace(/^!/, '').toLowerCase();
+                if (a === selNorm || b === selNorm) {
+                    connected.add(a);
+                    connected.add(b);
                 }
             }
-            nodes = nodes.filter((n) => connected.has(n.id));
-            edges = edges.filter((e) => connected.has(String(e.source)) && connected.has(String(e.target)));
+            nodes = nodes.filter((n) => connected.has(String(n.id).replace(/^!/, '').toLowerCase()));
+            edges = edges.filter((e) => {
+                const a = String(e.source).replace(/^!/, '').toLowerCase();
+                const b = String(e.target).replace(/^!/, '').toLowerCase();
+                return connected.has(a) && connected.has(b);
+            });
         }
 
         if (!nodes.length && !edges.length) {
@@ -473,11 +515,18 @@ class TopologyTab {
         const node = g.append('g').selectAll('circle').data(nodes).join('circle')
             .attr('r', 8)
             .attr('fill', accentCyan)
-            .attr('stroke', (d) => (d.id === sel ? accentGreen : '#0f172a'))
-            .attr('stroke-width', (d) => (d.id === sel ? 2.5 : 1))
+            .attr('stroke', (d) => (
+                String(d.id).replace(/^!/, '').toLowerCase() === selNorm ? accentGreen : '#0f172a'
+            ))
+            .attr('stroke-width', (d) => (
+                String(d.id).replace(/^!/, '').toLowerCase() === selNorm ? 2.5 : 1
+            ))
             .style('cursor', 'pointer')
             .on('click', (_, d) => {
-                const mesh = this._meshNodes.find((n) => (n.node_id || n.id) === d.id);
+                const dNorm = String(d.id).replace(/^!/, '').toLowerCase();
+                const mesh = this._meshNodes.find(
+                    (n) => String(n.node_id || n.id).replace(/^!/, '').toLowerCase() === dNorm,
+                );
                 if (mesh) this._selectNode(mesh);
             });
 

@@ -7,9 +7,15 @@
     const RSSI_GOOD = -90;
     const RSSI_MED = -110;
 
+    function normalizeNodeId(id) {
+        if (id == null || id === '') return '';
+        return String(id).trim().toLowerCase().replace(/^!/, '');
+    }
+
     function edgeKey(a, b) {
-        const x = String(a);
-        const y = String(b);
+        const x = normalizeNodeId(a);
+        const y = normalizeNodeId(b);
+        if (!x || !y) return '';
         return x < y ? `${x}:${y}` : `${y}:${x}`;
     }
 
@@ -74,7 +80,7 @@
         }
 
         setSelectedNode(nodeId) {
-            this._selectedNodeId = nodeId || null;
+            this._selectedNodeId = nodeId ? normalizeNodeId(nodeId) : null;
             this._emit();
         }
 
@@ -86,7 +92,7 @@
         syncMeshNodes(nodes) {
             this._meshNodes.clear();
             for (const n of nodes || []) {
-                const id = n.node_id || n.id;
+                const id = normalizeNodeId(n.node_id || n.id);
                 if (!id) continue;
                 this._knownNodeIds.add(id);
                 this._meshNodes.set(id, n);
@@ -122,16 +128,26 @@
         loadFromApi(data) {
             if (!data || typeof data !== 'object') return;
             this._fetchedAt = Date.now();
-            this._routes = Array.isArray(data.routes) ? data.routes.slice() : [];
+            this._edges.clear();
+            this._routes = Array.isArray(data.routes)
+                ? data.routes.map((r) => ({
+                    ...r,
+                    source_id: normalizeNodeId(r.source_id),
+                    route: (r.route || []).map((hop) => normalizeNodeId(hop)).filter(Boolean),
+                }))
+                : [];
             this._edgeSources = Array.isArray(data.edge_sources) ? data.edge_sources.slice() : [];
             this._stats = data.stats || {};
             this._estimates = new Map();
             for (const est of data.estimates || []) {
-                if (est?.id) this._estimates.set(est.id, est);
+                if (est?.id) {
+                    const eid = normalizeNodeId(est.id);
+                    this._estimates.set(eid, { ...est, id: eid });
+                }
             }
 
             for (const n of data.nodes || []) {
-                const id = n.id;
+                const id = normalizeNodeId(n.id);
                 if (!id) continue;
                 this._knownNodeIds.add(id);
                 const mesh = this._meshNodes.get(id);
@@ -173,7 +189,7 @@
                 return false;
             }
 
-            const sourceId = packet.source_id;
+            const sourceId = normalizeNodeId(packet.source_id);
             if (sourceId) {
                 this._knownNodeIds.add(sourceId);
                 const existing = this._nodes.get(sourceId) || { id: sourceId };
@@ -201,10 +217,10 @@
                 const neighbors = payload.neighbors || [];
                 if (!Array.isArray(neighbors)) return true;
                 for (const nb of neighbors) {
-                    const target = nb.node_id || nb.id;
+                    const target = normalizeNodeId(nb.node_id || nb.id);
                     if (!target) continue;
-                    this._knownNodeIds.add(String(target));
-                    this._upsertEdge(sourceId, String(target), {
+                    this._knownNodeIds.add(target);
+                    this._upsertEdge(sourceId, target, {
                         rssi,
                         snr: nb.snr != null ? nb.snr : snr,
                         hops: 1,
@@ -223,7 +239,7 @@
                 : [payload.route_reply, payload.route_request];
             for (const route of routeFields) {
                 if (!Array.isArray(route) || route.length < 2) continue;
-                const routeIds = route.map(String);
+                const routeIds = route.map((hop) => normalizeNodeId(hop)).filter(Boolean);
                 for (let i = 0; i < routeIds.length - 1; i++) {
                     this._upsertEdge(routeIds[i], routeIds[i + 1], {
                         rssi,
@@ -252,14 +268,16 @@
         }
 
         _upsertEdge(a, b, data) {
-            if (!a || !b || a === b) return;
-            const key = edgeKey(a, b);
+            const na = normalizeNodeId(a);
+            const nb = normalizeNodeId(b);
+            if (!na || !nb || na === nb) return;
+            const key = edgeKey(na, nb);
             const existing = this._edges.get(key) || {};
             this._edges.set(key, {
                 ...existing,
                 ...data,
-                nodeA: a < b ? a : b,
-                nodeB: a < b ? b : a,
+                nodeA: na < nb ? na : nb,
+                nodeB: na < nb ? nb : na,
                 key,
             });
         }
@@ -394,4 +412,5 @@
     }
 
     window.TopologyStore = TopologyStore;
+    window.normalizeNodeId = normalizeNodeId;
 })();

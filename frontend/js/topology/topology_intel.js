@@ -321,8 +321,12 @@
             let updatedAt = meta?.updatedAt;
 
             if (!route?.length && snap?.routes?.length) {
+                const idNorm = String(id).replace(/^!/, '').toLowerCase();
                 for (const r of snap.routes) {
-                    if (r.route?.includes(id)) {
+                    const path = (r.route || []).map(
+                        (h) => String(h).replace(/^!/, '').toLowerCase(),
+                    );
+                    if (path.includes(idNorm)) {
                         route = r.route;
                         snrT = r.snr_towards || snrT;
                         snrB = r.snr_back || snrB;

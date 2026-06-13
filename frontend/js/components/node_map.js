@@ -6,6 +6,14 @@ const MAP_VIEW_STORAGE_KEY = 'meshpoint.nodeMap.view';
 const MAP_DEFAULT_CENTER = [39.8, -98.5];
 const MAP_DEFAULT_ZOOM = 4;
 
+function _normNodeId(id) {
+    if (typeof window.normalizeNodeId === 'function') {
+        return window.normalizeNodeId(id);
+    }
+    if (id == null || id === '') return '';
+    return String(id).trim().toLowerCase().replace(/^!/, '');
+}
+
 class NodeMap {
     constructor(containerId, options = {}) {
         this._containerId = containerId;
@@ -17,7 +25,9 @@ class NodeMap {
         this._deviceMarker = null;
         this._markers = {};
         this._edgeLines = new Map();
+        this._routeLines = [];
         this._darkStubMarkers = new Map();
+        this._localNodeId = options.localNodeId || null;
         this._darkOrbitLayer = null;
         this._initialized = false;
         this._hasFitBounds = false;
@@ -56,6 +66,7 @@ class NodeMap {
         this._wireResizeRecalc();
 
         this._topologyLayer = L.layerGroup();
+        this._routeLayer = L.layerGroup();
         this._topologyVisible = false;
         this._darkStubLayer = L.layerGroup();
         this._coverageLayer = L.layerGroup();
@@ -83,6 +94,7 @@ class NodeMap {
 
         if (this._topologyEnabled) {
             this._map.addLayer(this._topologyLayer);
+            this._map.addLayer(this._routeLayer);
             this._darkOrbitLayer = L.layerGroup().addTo(this._map);
 
             this._topologyHintEl = document.createElement('div');
@@ -172,15 +184,15 @@ class NodeMap {
 
             let drawn = 0;
             for (const link of links) {
-                const src = link.source;
-                const tgt = link.target;
-                const srcMarker = this._markers[src];
-                const tgtMarker = this._markers[tgt];
-                if (!srcMarker || !tgtMarker) continue;
+                const src = _normNodeId(link.source);
+                const tgt = _normNodeId(link.target);
+                const srcLl = this._resolveLatLng(src);
+                const tgtLl = this._resolveLatLng(tgt);
+                if (!srcLl || !tgtLl) continue;
                 drawn += 1;
 
                 const line = L.polyline(
-                    [srcMarker.getLatLng(), tgtMarker.getLatLng()],
+                    [srcLl, tgtLl],
                     {
                         color: '#f59e0b',
                         weight: 1.5,
@@ -204,6 +216,24 @@ class NodeMap {
         } catch (e) {
             console.error('Topology load failed:', e);
         }
+    }
+
+    setLocalNodeId(nodeId) {
+        this._localNodeId = nodeId ? _normNodeId(nodeId) : null;
+        if (this._topologyEnabled) this.renderTopology();
+    }
+
+    _resolveLatLng(nodeId) {
+        const id = _normNodeId(nodeId);
+        if (!id) return null;
+        const marker = this._markers[id];
+        if (marker) return marker.getLatLng();
+        const stub = this._darkStubMarkers.get(id);
+        if (stub) return stub.getLatLng();
+        if (this._localNodeId && id === this._localNodeId && this._deviceMarker) {
+            return this._deviceMarker.getLatLng();
+        }
+        return null;
     }
 
     _buildMapChrome() {
@@ -361,8 +391,9 @@ class NodeMap {
             this._setCoverageVisible(true);
         }
 
-        this._renderEdges(snap.edges, showEdges, mode);
         this._renderDarkStubs(snap.unplotted, snap.estimates || [], showDark);
+        this._renderEdges(snap.edges, showEdges, mode);
+        this._renderRoutePaths(snap.routes, showEdges && mode !== 'coverage');
         this._updateLabels(showLabels);
         this._updateBadges(snap);
         this._updateStatusStrip(snap);
@@ -380,9 +411,9 @@ class NodeMap {
         let drawn = 0;
 
         for (const edge of edges) {
-            const srcMarker = this._markers[edge.nodeA];
-            const tgtMarker = this._markers[edge.nodeB];
-            if (!srcMarker || !tgtMarker) continue;
+            const srcLl = this._resolveLatLng(edge.nodeA);
+            const tgtLl = this._resolveLatLng(edge.nodeB);
+            if (!srcLl || !tgtLl) continue;
 
             drawn += 1;
             activeKeys.add(edge.key);
@@ -390,7 +421,7 @@ class NodeMap {
             const color = this._resolveEdgeColor(edge, mode);
             const weight = this._store.edgeWeight(edge);
             const dash = this._store.edgeDash(edge);
-            const latlngs = [srcMarker.getLatLng(), tgtMarker.getLatLng()];
+            const latlngs = [srcLl, tgtLl];
 
             if (this._edgeLines.has(edge.key)) {
                 const line = this._edgeLines.get(edge.key);
@@ -423,6 +454,43 @@ class NodeMap {
         this._updateTopologyHint(edges.length, drawn);
     }
 
+    _renderRoutePaths(routes, showRoutes) {
+        this._routeLayer.clearLayers();
+        this._routeLines = [];
+        if (!showRoutes || !routes?.length) return;
+
+        const selected = this._store?.selectedNodeId;
+        const pool = selected
+            ? routes.filter((r) => (r.route || []).includes(selected))
+            : routes;
+        const accentAmber = this._cssToken('--accent-amber', '#f59e0b');
+
+        for (const route of pool.slice(0, 10)) {
+            const path = route.route || [];
+            const latlngs = [];
+            for (const hop of path) {
+                const ll = this._resolveLatLng(hop);
+                if (ll) latlngs.push(ll);
+            }
+            if (latlngs.length < 2) continue;
+
+            const line = L.polyline(latlngs, {
+                color: accentAmber,
+                weight: 3,
+                opacity: 0.72,
+                dashArray: '10, 6',
+                lineCap: 'round',
+            });
+            const hops = path.map((h) => `!${_normNodeId(h).slice(-4)}`).join(' → ');
+            line.bindTooltip(`Traceroute<br>${hops}`, {
+                sticky: true,
+                className: 'map-edge-tooltip',
+            });
+            line.addTo(this._routeLayer);
+            this._routeLines.push(line);
+        }
+    }
+
     _resolveEdgeColor(edge, mode) {
         if (mode === 'signal') {
             const snr = edge.snr;
@@ -452,9 +520,12 @@ class NodeMap {
     }
 
     _nodeLabel(nodeId) {
-        const mesh = this._lastNodes?.find((n) => n.node_id === nodeId);
+        const id = _normNodeId(nodeId);
+        const mesh = this._lastNodes?.find(
+            (n) => _normNodeId(n.node_id || n.id) === id,
+        );
         if (mesh) return mesh.long_name || mesh.display_name || mesh.short_name || nodeId;
-        const stored = this._store?.getSnapshot()?.nodes?.find((n) => n.id === nodeId);
+        const stored = this._store?.getSnapshot()?.nodes?.find((n) => _normNodeId(n.id) === id);
         return stored?.label || nodeId;
     }
 
@@ -470,7 +541,9 @@ class NodeMap {
             return;
         }
 
-        const estimateById = new Map((estimates || []).map((e) => [e.id, e]));
+        const estimateById = new Map(
+            (estimates || []).map((e) => [_normNodeId(e.id), e]),
+        );
         const device = this._lastDevice;
         const hasDeviceGps = device?.latitude && device?.longitude;
         const stubCenter = hasDeviceGps ? [device.latitude, device.longitude] : null;
@@ -479,7 +552,8 @@ class NodeMap {
         let usedStubRing = false;
 
         for (const node of unplotted.slice(0, 32)) {
-            const est = estimateById.get(node.id);
+            const nid = _normNodeId(node.id);
+            const est = estimateById.get(nid);
             let pos;
             let popupNote;
 
@@ -533,10 +607,10 @@ class NodeMap {
                 popupNote,
             );
             marker.on('click', () => {
-                if (this._store) this._store.setSelectedNode(node.id);
+                if (this._store) this._store.setSelectedNode(nid);
             });
             marker.addTo(this._darkStubLayer);
-            this._darkStubMarkers.set(node.id, marker);
+            this._darkStubMarkers.set(nid, marker);
         }
 
         if (!this._map.hasLayer(this._darkStubLayer) && this._darkStubMarkers.size) {
@@ -568,7 +642,9 @@ class NodeMap {
                 marker.unbindTooltip();
                 continue;
             }
-            const mesh = this._lastNodes?.find((n) => n.node_id === id);
+            const mesh = this._lastNodes?.find(
+                (n) => _normNodeId(n.node_id || n.id) === id,
+            );
             const name = mesh?.short_name || mesh?.long_name?.slice(0, 6) || id.slice(-4);
             marker.unbindTooltip();
             marker.bindTooltip(name, {
@@ -663,13 +739,16 @@ class NodeMap {
     }
 
     _addNodeMarker(n) {
+        const nodeId = _normNodeId(n.node_id || n.id);
+        if (!nodeId) return;
+
         const isMeshtastic = (n.protocol || 'meshtastic') === 'meshtastic';
         const protoColor = isMeshtastic ? '#06b6d4' : '#a855f7';
 
         const heard = n.last_heard || n.last_seen;
         const isRecent = heard && (Date.now() - new Date(heard).getTime()) < 60000;
-        const isFav = !!(window.MeshpointNodeFavorites && window.MeshpointNodeFavorites.has(n.node_id));
-        const isSelected = this._store?.selectedNodeId === n.node_id;
+        const isFav = !!(window.MeshpointNodeFavorites && window.MeshpointNodeFavorites.has(nodeId));
+        const isSelected = this._store?.selectedNodeId === nodeId;
 
         let marker;
         if (isMeshtastic) {
@@ -700,7 +779,7 @@ class NodeMap {
             marker._meshpointKind = 'diamond';
         }
 
-        const name = n.long_name || n.name || n.node_id || '--';
+        const name = n.long_name || n.name || nodeId || '--';
         const rssi = (n.rssi ?? n.latest_rssi) != null
             ? `${Number(n.rssi ?? n.latest_rssi).toFixed(0)} dBm` : '--';
         const lastHeard = this._formatRelativeTime(heard);
@@ -713,11 +792,11 @@ class NodeMap {
         );
 
         marker.on('click', () => {
-            if (this._store) this._store.setSelectedNode(n.node_id);
+            if (this._store) this._store.setSelectedNode(nodeId);
         });
 
         this._markerGroup.addLayer(marker);
-        this._markers[n.node_id] = marker;
+        this._markers[nodeId] = marker;
     }
 
     _formatRelativeTime(timestamp) {
@@ -738,11 +817,11 @@ class NodeMap {
     drawFocusLine(sourceNodeId) {
         this.clearFocusLine();
         if (!this._initialized || !this._deviceMarker) return;
-        const srcMarker = this._markers[sourceNodeId];
-        if (!srcMarker) return;
+        const srcLl = this._resolveLatLng(sourceNodeId);
+        if (!srcLl) return;
 
         this._focusLine = L.polyline(
-            [srcMarker.getLatLng(), this._deviceMarker.getLatLng()],
+            [srcLl, this._deviceMarker.getLatLng()],
             { color: '#f59e0b', weight: 3, opacity: 0.9 },
         ).addTo(this._map);
     }
@@ -796,16 +875,17 @@ class NodeMap {
     updateFromPacket(packet) {
         if (!packet.source_id || !this._initialized) return;
 
+        const sourceId = _normNodeId(packet.source_id);
         const payload = packet.decoded_payload || {};
         const type = (packet.packet_type || '').toLowerCase();
         const lat = payload.latitude ?? payload.adv_lat;
         const lon = payload.longitude ?? payload.adv_lon;
         const hasCoords = lat != null && lon != null && !(lat === 0 && lon === 0);
 
-        if (!this._markers[packet.source_id] && hasCoords
+        if (!this._markers[sourceId] && hasCoords
             && (type === 'nodeinfo' || type === 'position')) {
             const node = {
-                node_id: packet.source_id,
+                node_id: sourceId,
                 latitude: lat,
                 longitude: lon,
                 protocol: packet.protocol || 'meshtastic',
@@ -825,7 +905,7 @@ class NodeMap {
             return;
         }
 
-        const marker = this._markers[packet.source_id];
+        const marker = this._markers[sourceId];
         if (!marker) return;
 
         const isMeshtastic = (packet.protocol || 'meshtastic') === 'meshtastic';
@@ -945,8 +1025,15 @@ class NodeMap {
 
     _updateTopologyHint(totalLinks, drawnLinks) {
         if (!this._topologyHintEl) return;
-        const show = this._topologyVisible && totalLinks > 0 && drawnLinks === 0;
+        const active = this._topologyEnabled || this._topologyVisible;
+        if (!active) return;
+        const show = totalLinks > 0 && drawnLinks === 0;
         this._topologyHintEl.hidden = !show;
+        if (show) {
+            this._topologyHintEl.textContent =
+                `${totalLinks} link(s) in graph — none drawn on map yet. `
+                + 'Nodes need GPS coordinates (or dark stubs) at both ends.';
+        }
     }
 
     _esc(str) {
