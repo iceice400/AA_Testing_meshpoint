@@ -912,6 +912,46 @@ def _build_suspend_meshcore(coord: PipelineCoordinator):
     return _suspend
 
 
+def _build_resume_meshcore(coord: PipelineCoordinator):
+    """Restart MeshCore USB capture after esptool finishes."""
+
+    async def _resume(_serial_port: str) -> None:
+        mc_source = _find_meshcore_source(coord)
+        if mc_source is None:
+            return
+        if not mc_source.is_running:
+            await mc_source.start()
+            logger.info(
+                "Resumed MeshCore USB capture on %s after firmware flash",
+                _serial_port,
+            )
+
+    return _resume
+
+
+def _build_companion_status(tx_service):
+    """Probe MeshCore companion connection for firmware UI status."""
+
+    async def _status() -> dict:
+        out = {"enabled": False, "connected": False, "companion_name": ""}
+        if tx_service is None:
+            return out
+        out["enabled"] = bool(getattr(tx_service, "meshcore_enabled", False))
+        mc_tx = getattr(tx_service, "_meshcore_tx", None)
+        if mc_tx is None or not mc_tx.connected:
+            return out
+        out["connected"] = True
+        try:
+            radio = await mc_tx.get_radio_info()
+            if radio:
+                out["companion_name"] = getattr(radio, "name", "") or ""
+        except Exception:
+            pass
+        return out
+
+    return _status
+
+
 async def _reapply_companion_name(meshcore_tx, config: AppConfig) -> None:
     """Re-apply the configured companion name on every USB connect.
 
@@ -1469,6 +1509,8 @@ def _init_routes(
     firmware_routes.init_routes(
         jwt_service=auth_subsystem.jwt_service,
         suspend_meshcore=_build_suspend_meshcore(coord),
+        resume_meshcore=_build_resume_meshcore(coord),
+        companion_status=_build_companion_status(tx_service),
         default_serial_port=mc_usb.serial_port or "/dev/ttyUSB0",
     )
     if admin_reader is not None:

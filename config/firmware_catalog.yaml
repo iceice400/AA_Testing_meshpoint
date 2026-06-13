@@ -1,0 +1,73 @@
+# USB companion firmware catalog for Settings → Flash companion firmware.
+# Tier B/C: board profiles + GitHub release asset matching.
+# Refresh pinned_sha256 when bumping release_tag below.
+
+version: 1
+
+release:
+  github_repo: meshcore-dev/MeshCore
+  release_tag: companion-v1.16.0
+  prefer_merged: true
+  variant: companion_radio_usb
+
+external_flashers:
+  - id: meshcore_web
+    label: MeshCore Web Flasher
+    url: https://meshcore.io/flasher
+    hint: First-time setup when the radio is plugged into your laptop (Chrome/Edge).
+  - id: meshtastic_web
+    label: Meshtastic Web Flasher
+    url: https://flasher.meshtastic.org/
+    hint: Meshtastic handheld nodes — not MeshCore USB companion firmware.
+
+boards:
+  - id: heltec_v3
+    label: Heltec LoRa V3
+    asset_prefix: Heltec_v3_companion_radio_usb
+    baud_rate: 460800
+    partition_offset: "0x10000"
+    recommended: true
+    notes: Common MeshPoint companion. Pick USB variant, not BLE.
+
+  - id: heltec_v4
+    label: Heltec WiFi LoRa 32 V4
+    asset_prefix: heltec_v4_companion_radio_usb
+    baud_rate: 460800
+    partition_offset: "0x10000"
+    recommended: true
+    default_revision: v4_0_v4_1
+    revisions:
+      - id: v4_0_v4_1
+        label: v4.0 / v4.1
+        notes: Official merged release works on these boards.
+      - id: v4_2_v4_3
+        label: v4.2 / v4.3
+        warning: >
+          Heltec V4 v4.2/v4.3 may need a community merged image if the
+          official build fails handshake after flash. See mcimages.weebl.me.
+        community_url: https://mcimages.weebl.me/
+
+  - id: heltec_v4_tft
+    label: Heltec V4 (TFT / OLED)
+    asset_prefix: heltec_v4_tft_companion_radio_usb
+    baud_rate: 460800
+    partition_offset: "0x10000"
+
+  - id: heltec_wireless_tracker
+    label: Heltec Wireless Tracker
+    asset_prefix: Heltec_Wireless_Tracker_companion_radio_usb
+    baud_rate: 460800
+    partition_offset: "0x10000"
+
+  - id: lilygo_tbeam_1w
+    label: LilyGo T-Beam 1W
+    asset_prefix: LilyGo_TBeam_1W_companion_radio_usb
+    baud_rate: 460800
+    partition_offset: "0x10000"
+    recommended: true
+
+  - id: lilygo_t3s3_sx1262
+    label: LilyGo T3S3 (SX1262)
+    asset_prefix: LilyGo_T3S3_sx1262_companion_radio_usb
+    baud_rate: 460800
+    partition_offset: "0x10000"

@@ -1018,3 +1018,100 @@ select.update-field__input option:checked {
 }
 
 .dangerous-panel__status[data-kind="error"] { color: #ff6b6b; }
+
+/* Companion firmware flasher (Settings → System) */
+.companion-flash-section {
+    margin: 16px 0;
+    padding-top: 4px;
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.companion-flash-section__title {
+    margin: 0 0 6px;
+    font-size: 14px;
+    font-weight: 600;
+}
+
+.companion-flash-external {
+    margin: 12px 0 16px;
+    padding: 12px 14px;
+    border-radius: 10px;
+    background: rgba(0, 0, 0, 0.2);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.companion-flash-external__list {
+    margin: 8px 0 0;
+    padding-left: 1.2rem;
+    font-size: 13px;
+    line-height: 1.55;
+}
+
+.companion-flash-external__hint {
+    display: block;
+    color: rgba(243, 244, 246, 0.55);
+    font-size: 12px;
+    margin-top: 2px;
+}
+
+.companion-flash-status {
+    margin: 0 0 12px;
+    padding: 10px 12px;
+    border-radius: 8px;
+    font-size: 13px;
+    background: rgba(255, 255, 255, 0.04);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.companion-flash-status[data-kind="success"] { color: #44d39a; }
+.companion-flash-status[data-kind="pending"] { color: rgba(243, 244, 246, 0.75); }
+.companion-flash-status[data-kind="warn"] { color: #ffb84d; }
+
+.companion-flash-warning {
+    margin: 8px 0;
+    padding: 10px 12px;
+    border-radius: 8px;
+    font-size: 12px;
+    line-height: 1.5;
+    color: #ffb84d;
+    background: rgba(255, 184, 77, 0.08);
+    border: 1px solid rgba(255, 184, 77, 0.25);
+}
+
+.companion-flash-artifact {
+    margin: 0 0 10px;
+    font-size: 12px;
+    font-family: 'JetBrains Mono', Menlo, monospace;
+    color: rgba(243, 244, 246, 0.7);
+    word-break: break-all;
+}
+
+.companion-flash-advanced,
+.companion-flash-manual {
+    margin: 12px 0;
+    font-size: 13px;
+}
+
+.companion-flash-advanced summary,
+.companion-flash-manual summary {
+    cursor: pointer;
+    color: var(--accent-cyan, #22d3ee);
+    user-select: none;
+    margin-bottom: 8px;
+}
+
+.companion-flash-log {
+    margin: 12px 0 0;
+    max-height: 220px;
+    overflow: auto;
+    padding: 12px;
+    border-radius: 8px;
+    font-family: 'JetBrains Mono', Menlo, monospace;
+    font-size: 11px;
+    line-height: 1.45;
+    background: rgba(0, 0, 0, 0.35);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    color: rgba(243, 244, 246, 0.85);
+    white-space: pre-wrap;
+}
+
