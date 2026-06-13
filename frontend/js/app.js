@@ -130,6 +130,9 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     const topologyStore = new TopologyStore({ hours: 24 });
     window.topologyStore = topologyStore;
+    if (window.topologyTab) {
+        window.topologyTab.bindStore(topologyStore);
+    }
     const knownNodeIds = new Set();
 
     const nodeMap = new NodeMap('map', { topology: false });

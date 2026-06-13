@@ -35,6 +35,7 @@ class NodeMap {
         this._markers = {};
         this._edgeLines = new Map();
         this._routeLines = [];
+        this._hopSegmentLines = new Map();
         this._darkStubMarkers = new Map();
         this._localNodeId = options.localNodeId || null;
         this._darkOrbitLayer = null;
@@ -242,6 +243,20 @@ class NodeMap {
             this.renderTopology();
         } else if (this._topologyVisible) {
             this._loadTopology();
+        }
+    }
+
+    setStore(store) {
+        if (this._unsubStore) {
+            this._unsubStore();
+            this._unsubStore = null;
+        }
+        this._store = store || null;
+        if (this._topologyEnabled && this._store) {
+            this._unsubStore = this._store.onChange(() => {
+                this.renderTopology();
+            });
+            this.renderTopology();
         }
     }
 
@@ -558,38 +573,91 @@ class NodeMap {
     _renderRoutePaths(routes, showRoutes) {
         this._routeLayer.clearLayers();
         this._routeLines = [];
+        for (const lines of this._hopSegmentLines.values()) {
+            for (const line of lines) {
+                this._routeLayer.removeLayer(line);
+            }
+        }
+        this._hopSegmentLines.clear();
         if (!showRoutes || !routes?.length) return;
 
         const selected = this._store?.selectedNodeId;
         const pool = selected
             ? routes.filter((r) => (r.route || []).includes(selected))
             : routes;
-        const accentAmber = this._cssToken('--accent-amber', '#f59e0b');
+        const now = Date.now();
+        const hopLiveMs = 120_000;
 
-        for (const route of pool.slice(0, 10)) {
+        for (const route of pool.slice(0, 12)) {
             const path = route.route || [];
-            const latlngs = [];
-            for (const hop of path) {
-                const ll = this._resolveLatLng(hop);
-                if (ll) latlngs.push(ll);
-            }
-            if (latlngs.length < 2) continue;
+            const snrTowards = route.snr_towards || [];
+            const routeTs = route.ts
+                || (route.last_seen ? new Date(route.last_seen).getTime() : 0);
+            const isRecent = routeTs > 0 && (now - routeTs) < hopLiveMs;
+            const routeKey = `rt:${path.join('>')}`;
 
-            const line = L.polyline(latlngs, {
-                color: accentAmber,
-                weight: 3,
-                opacity: 0.72,
-                dashArray: '10, 6',
-                lineCap: 'round',
-            });
-            const hops = path.map((h) => `!${_normNodeId(h).slice(-4)}`).join(' → ');
-            line.bindTooltip(`Traceroute<br>${hops}`, {
-                sticky: true,
-                className: 'map-edge-tooltip',
-            });
-            line.addTo(this._routeLayer);
-            this._routeLines.push(line);
+            let drewSegment = false;
+            for (let i = 0; i < path.length - 1; i += 1) {
+                const a = this._resolveLatLng(path[i]);
+                const b = this._resolveLatLng(path[i + 1]);
+                if (!a || !b) continue;
+
+                const snr = snrTowards[i];
+                const color = this._snrHopColor(snr);
+                const line = L.polyline([a, b], {
+                    color,
+                    weight: 4,
+                    opacity: 0.9,
+                    lineCap: 'round',
+                    className: isRecent ? 'topo-hop-live' : '',
+                });
+                const snrTxt = snr != null ? `${Number(snr).toFixed(1)} dB` : '—';
+                line.bindTooltip(`Hop ${i + 1}→${i + 2}<br>SNR: ${snrTxt}`, {
+                    sticky: true,
+                    className: 'map-edge-tooltip',
+                });
+                line.addTo(this._routeLayer);
+                if (!this._hopSegmentLines.has(routeKey)) {
+                    this._hopSegmentLines.set(routeKey, []);
+                }
+                this._hopSegmentLines.get(routeKey).push(line);
+                this._routeLines.push(line);
+                drewSegment = true;
+            }
+
+            if (!drewSegment && path.length >= 2) {
+                const latlngs = [];
+                for (const hop of path) {
+                    const ll = this._resolveLatLng(hop);
+                    if (ll) latlngs.push(ll);
+                }
+                if (latlngs.length >= 2) {
+                    const line = L.polyline(latlngs, {
+                        color: this._cssToken('--accent-amber', '#f59e0b'),
+                        weight: 3,
+                        opacity: 0.72,
+                        dashArray: '10, 6',
+                        lineCap: 'round',
+                        className: isRecent ? 'topo-hop-live' : '',
+                    });
+                    const hops = path.map((h) => `!${_normNodeId(h).slice(-4)}`).join(' → ');
+                    line.bindTooltip(`Traceroute<br>${hops}`, {
+                        sticky: true,
+                        className: 'map-edge-tooltip',
+                    });
+                    line.addTo(this._routeLayer);
+                    this._routeLines.push(line);
+                }
+            }
         }
+    }
+
+    _snrHopColor(snr) {
+        if (snr == null) return this._cssToken('--text-muted', '#64748b');
+        if (snr > 10) return this._cssToken('--accent-green', '#00e5a0');
+        if (snr > 5) return '#a3e635';
+        if (snr > 0) return this._cssToken('--accent-amber', '#f59e0b');
+        return this._cssToken('--accent-red', '#ef4444');
     }
 
     _resolveEdgeColor(edge, mode) {

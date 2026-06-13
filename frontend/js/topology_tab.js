@@ -21,9 +21,10 @@ class TopologyTab {
         this._settings = new TopologySettings();
         this._hours = this._settings.get('hours') || 24;
         this._audio = new TopologyAudio(this._settings);
+        this._storeRef = null;
         this._poller = new SmartPoller({
             settings: this._settings,
-            store: window.topologyStore,
+            store: null,
             observer: this._observer,
             onAlert: (a) => this._intel?.pushAlert(a),
             onQueueChange: (queue, state) => this._intel?.updateQueueStatus(queue, state),
@@ -56,8 +57,34 @@ class TopologyTab {
         return role === 'viewer';
     }
 
+    /** Wire shared store after app.js boot (topology_tab.js loads before app.js). */
+    bindStore(store) {
+        if (!store) return;
+        this._storeRef = store;
+        if (this._poller) this._poller._store = store;
+        if (this._roster) this._roster._store = store;
+        if (this._intel) this._intel._store = store;
+        if (this._topoMap) {
+            this._topoMap.setStore(store);
+        }
+        if (this._unsubStore) {
+            this._unsubStore();
+            this._unsubStore = null;
+        }
+        this._unsubStore = store.onChange(() => {
+            if (this._viewMode === 'graph') this._renderGraph();
+            if (this._topoMap && this._viewMode === 'map') this._topoMap.renderTopology();
+            this._intel?.setSelectedNode(this._selectedNode);
+        });
+    }
+
+    _store() {
+        return this._storeRef || window.topologyStore || null;
+    }
+
     async refresh() {
         if (!this._container) return;
+        this.bindStore(this._store());
         if (!this._rendered) {
             this._buildLayout();
             this._rendered = true;
@@ -85,22 +112,24 @@ class TopologyTab {
         if (nodesRes.ok) {
             const nodesData = await nodesRes.json();
             this._meshNodes = TopologyTab._parseNodesResponse(nodesData);
-            if (window.topologyStore) {
-                window.topologyStore.syncMeshNodes(this._meshNodes);
+            const store = this._store();
+            if (store) {
+                store.syncMeshNodes(this._meshNodes);
             }
         } else {
             console.warn('Topology tab: nodes API failed — keeping cached roster');
-            if (!this._meshNodes.length && window.topologyStore?.getMeshNodeList) {
-                this._meshNodes = window.topologyStore.getMeshNodeList();
+            if (!this._meshNodes.length && this._store()?.getMeshNodeList) {
+                this._meshNodes = this._store().getMeshNodeList();
             }
         }
 
         if (topoRes.ok) {
             this._graph = await topoRes.json();
             this._fetchedAt = Date.now();
-            if (window.topologyStore) {
-                window.topologyStore.setHours(this._hours);
-                window.topologyStore.loadFromApi(this._graph);
+            const store = this._store();
+            if (store) {
+                store.setHours(this._hours);
+                store.loadFromApi(this._graph);
             }
         }
 
@@ -124,9 +153,10 @@ class TopologyTab {
     }
 
     _renderAll() {
+        const store = this._store();
         const rosterNodes = this._meshNodes.length
             ? this._meshNodes
-            : (window.topologyStore?.getMeshNodeList?.() || []);
+            : (store?.getMeshNodeList?.() || []);
         this._roster?.render(rosterNodes);
         this._chBar?.refresh(this._hours);
         if (this._viewMode === 'map') {
@@ -185,7 +215,7 @@ class TopologyTab {
         if (stripHost) stripHost.remove();
 
         this._roster = new TopologyRoster('topo-roster-host', {
-            store: window.topologyStore,
+            store: null,
             settings: this._settings,
             poller: this._poller,
             observer: this._observer,
@@ -194,7 +224,7 @@ class TopologyTab {
         });
 
         this._intel = new TopologyIntel('topo-intel-host', {
-            store: window.topologyStore,
+            store: null,
             settings: this._settings,
             poller: this._poller,
             audio: this._audio,
@@ -212,13 +242,7 @@ class TopologyTab {
             ?.addEventListener('click', () => this._hideJsonModal());
         document.getElementById('topo-back-map')?.addEventListener('click', () => this._setViewMode('map'));
 
-        if (window.topologyStore && !this._unsubStore) {
-            this._unsubStore = window.topologyStore.onChange(() => {
-                if (this._viewMode === 'graph') this._renderGraph();
-                if (this._topoMap && this._viewMode === 'map') this._topoMap.renderTopology();
-                this._intel?.setSelectedNode(this._selectedNode);
-            });
-        }
+        this.bindStore(this._store());
 
         document.addEventListener('sidebar:routeActivated', (event) => {
             if (event.detail?.route !== 'topology') return;
@@ -274,7 +298,8 @@ class TopologyTab {
     _selectNode(node) {
         this._selectedNode = node;
         const id = node.node_id || node.id;
-        if (window.topologyStore) window.topologyStore.setSelectedNode(id);
+        const store = this._store();
+        if (store) store.setSelectedNode(id);
         this._roster?.setSelected(id);
         this._intel?.setSelectedNode(node);
         if (this._viewMode === 'map' && node.latitude && node.longitude) {
@@ -364,7 +389,7 @@ class TopologyTab {
             return;
         }
         if (name === 'export') {
-            const data = window.topologyStore?.exportJson();
+            const data = this._store()?.exportJson();
             if (!data) return;
             const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
             const url = URL.createObjectURL(blob);
@@ -421,15 +446,22 @@ class TopologyTab {
     }
 
     async _ensureTopoMap() {
-        if (typeof NodeMap === 'undefined' || !window.topologyStore) return;
+        if (typeof NodeMap === 'undefined') return;
+        const store = this._store();
+        if (!store) {
+            console.warn('Topology map: store not ready');
+            return;
+        }
         if (!this._topoMap) {
             this._topoMap = new NodeMap('topo-map', {
-                store: window.topologyStore,
+                store,
                 topology: true,
                 viewStorageKey: 'meshpoint.topoMap.view',
                 inactMin: this._settings.get('inactMin'),
                 localNodeId: this._localMeshNodeId,
             });
+        } else {
+            this._topoMap.setStore(store);
         }
         this._topoMap.setLocalNodeId(this._localMeshNodeId);
         this._topoMap.loadNodes(this._meshNodes, this._device);

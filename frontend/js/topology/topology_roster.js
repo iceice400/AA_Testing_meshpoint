@@ -267,6 +267,7 @@
             const t = String(role).toUpperCase();
             if (t.includes('ROUTER')) return 'ROUTER';
             if (t.includes('REPEAT')) return 'REPEATER';
+            if (t.includes('GATEWAY')) return 'ROUTER';
             return t;
         }
 

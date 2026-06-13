@@ -449,3 +449,12 @@
         width: 0;
     }
 }
+
+@keyframes topo-hop-pulse {
+    0%, 100% { stroke-opacity: 0.95; }
+    50% { stroke-opacity: 0.45; }
+}
+
+.topo-hop-live {
+    animation: topo-hop-pulse 1.8s ease-in-out infinite;
+}

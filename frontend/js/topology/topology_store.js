@@ -174,6 +174,7 @@
                     ...r,
                     source_id: normalizeNodeId(r.source_id),
                     route: (r.route || []).map((hop) => normalizeNodeId(hop)).filter(Boolean),
+                    ts: parseTs(r.last_seen),
                 }))
                 : [];
             this._edgeSources = Array.isArray(data.edge_sources) ? data.edge_sources.slice() : [];
@@ -216,6 +217,12 @@
                     ts: parseTs(e.last_seen),
                     channel: e.channel ?? null,
                 });
+            }
+
+            for (const r of this._routes) {
+                if (r.last_seen && !r.ts) {
+                    r.ts = parseTs(r.last_seen);
+                }
             }
 
             this._pruneStaleEdges();
@@ -316,6 +323,8 @@
                         route: routeIds,
                         snr_towards: payload.snr_towards || [],
                         snr_back: payload.snr_back || [],
+                        ts,
+                        last_seen: packet.timestamp || new Date(ts).toISOString(),
                     });
                     if (this._routes.length > 80) this._routes.length = 80;
                 }
