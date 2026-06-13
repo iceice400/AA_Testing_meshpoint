@@ -380,6 +380,52 @@ class MeshtasticPacketBuilder:
         )
         return header + ciphertext
 
+    def build_position_request(
+        self,
+        source_id: int,
+        dest: int,
+        packet_id: int,
+        *,
+        channel_key: bytes | None = None,
+        channel_hash: int = 0x08,
+        hop_limit: int = 3,
+        hop_start: int = 3,
+        recipient_public_key: bytes | None = None,
+    ) -> bytes | None:
+        """Build a unicast POSITION request (empty payload, want_response)."""
+        try:
+            from meshtastic.protobuf import mesh_pb2
+
+            payload = mesh_pb2.Position().SerializeToString()
+        except Exception:
+            logger.exception("Position request protobuf build failed")
+            return None
+
+        inner = self._serialize_data(
+            PORTNUM_POSITION, payload, request_id=packet_id
+        )
+        ciphertext = self._encrypt_payload(
+            inner,
+            packet_id,
+            source_id,
+            dest,
+            channel_key,
+            channel_hash,
+            recipient_public_key,
+        )
+        if ciphertext is None:
+            return None
+        on_air_hash = 0 if recipient_public_key else channel_hash
+        header = self._build_header(
+            dest,
+            source_id,
+            packet_id,
+            hop_limit=hop_limit,
+            hop_start=hop_start,
+            channel_hash=on_air_hash,
+        )
+        return header + ciphertext
+
     def build_traceroute_request(
         self,
         source_id: int,

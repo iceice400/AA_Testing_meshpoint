@@ -210,6 +210,19 @@
 
         setDeviceId(id) { this._deviceId = id; }
 
+        setTopologyStatus(status) {
+            this._topologyStatus = status || null;
+            const text = document.getElementById('topo-ps-text');
+            if (!text || !status) return;
+            if (status.meshtastic_tx_enabled === false) {
+                text.textContent = 'TX off — enable Meshtastic TX for traceroute/position';
+                return;
+            }
+            if (status.traceroute_available === false) {
+                text.textContent = 'Traceroute TX not wired on this node';
+            }
+        }
+
         setSelectedNode(node) {
             this._selectedNode = node;
             this._renderTraceView();

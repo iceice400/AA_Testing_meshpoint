@@ -93,12 +93,13 @@ class TopologyPoller:
 
         now = time.time()
         last = self._last_poll.get(node_id, 0.0)
-        if not force and (now - last) < self._interval_s:
+        min_spacing = FIRMWARE_TR_LIMIT_S
+        if not force and (now - last) < min_spacing:
             return {
                 "success": False,
                 "skipped": True,
                 "node_id": node_id,
-                "cooldown_remaining_s": round(self._interval_s - (now - last)),
+                "cooldown_remaining_s": round(min_spacing - (now - last)),
             }
 
         try:

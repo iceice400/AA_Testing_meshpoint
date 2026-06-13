@@ -1427,6 +1427,18 @@ def _init_routes(
         telemetry_repo=coord.telemetry_repo,
     )
     packets.init_routes(coord.packet_repo)
+    async def send_position_request(node_id: str):
+        if tx_service is None:
+            from src.transmit.tx_service import SendResult
+            return SendResult(
+                success=False, protocol="meshtastic", error="TX unavailable"
+            )
+        return await tx_service.send_position_request(node_id)
+
+    meshtastic_tx = (
+        tx_service is not None and tx_service.meshtastic_enabled
+    )
+
     analytics.init_routes(
         signal_analyzer,
         traffic_monitor,
@@ -1434,6 +1446,8 @@ def _init_routes(
         coord.node_repo,
         topology_poller=topology_poller,
         infer_dark_positions=config.topology.infer_dark_positions,
+        send_position_request=send_position_request if meshtastic_tx else None,
+        meshtastic_tx_enabled=meshtastic_tx,
     )
     device.init_routes(identity, ws_manager, coord.relay_manager)
     telemetry.init_routes(coord.telemetry_repo)

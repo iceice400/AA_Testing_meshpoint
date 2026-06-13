@@ -13,6 +13,7 @@ class TopologyTab {
         this._meshNodes = [];
         this._device = null;
         this._selectedNode = null;
+        this._topologyStatus = null;
         this._topoMap = null;
         this._fetchedAt = null;
         this._loading = false;
@@ -70,10 +71,11 @@ class TopologyTab {
     }
 
     async _loadData() {
-        const [topoRes, nodesRes, deviceRes] = await Promise.all([
+        const [topoRes, nodesRes, deviceRes, statusRes] = await Promise.all([
             fetch(`/api/analytics/topology?hours=${this._hours}`),
             fetch('/api/nodes?enrich=true'),
             fetch('/api/device'),
+            fetch('/api/analytics/topology/status', { credentials: 'same-origin' }),
         ]);
         if (topoRes.ok) {
             this._graph = await topoRes.json();
@@ -91,6 +93,13 @@ class TopologyTab {
         }
         if (this._intel && this._device?.node_id) {
             this._intel.setDeviceId(this._device.node_id);
+        }
+        if (statusRes.ok) {
+            const status = await statusRes.json();
+            const txReady = status.traceroute_available !== false && status.meshtastic_tx_enabled !== false;
+            this._poller?.setTxReady(txReady);
+            this._topologyStatus = status;
+            this._intel?.setTopologyStatus(status);
         }
     }
 
@@ -229,7 +238,7 @@ class TopologyTab {
     async _nodeAction(act, node) {
         const id = node.node_id || node.id;
         if (act === 'trace') {
-            this._poller?.enqueue(id, 'manual', 10);
+            await this._poller?.traceNode(id, { force: true, reason: 'manual' });
             return;
         }
         if (act === 'json') {
@@ -247,18 +256,41 @@ class TopologyTab {
             return;
         }
         if (act === 'position') {
-            try {
-                const res = await fetch(`/api/admin/nodes/${encodeURIComponent(id)}/config/request`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ section: 'position' }),
+            if (this._observer) {
+                this._intel?.pushAlert({
+                    type: 'warn', node_id: id, node_name: node.display_name || id,
+                    message: 'Observer mode — position request disabled.',
                 });
+                return;
+            }
+            if (this._topologyStatus?.position_request_available === false) {
+                this._intel?.pushAlert({
+                    type: 'warn', node_id: id, node_name: node.display_name || id,
+                    message: 'Meshtastic TX unavailable — enable onboard TX for position requests.',
+                });
+                return;
+            }
+            try {
+                const res = await fetch(
+                    `/api/analytics/topology/position/${encodeURIComponent(id)}`,
+                    { method: 'POST', credentials: 'same-origin' },
+                );
                 const data = await res.json().catch(() => ({}));
+                let message;
+                if (res.status === 401 || res.status === 403) {
+                    message = res.status === 403
+                        ? 'Admin login required for position requests.'
+                        : 'Sign in to request position.';
+                } else if (res.ok) {
+                    message = 'Position request sent — watch for POSITION reply.';
+                } else {
+                    message = data.detail || data.error || `Request failed (${res.status})`;
+                }
                 this._intel?.pushAlert({
                     type: res.ok ? 'info' : 'warn',
                     node_id: id,
                     node_name: node.display_name || id,
-                    message: res.ok ? 'Position config request sent.' : (data.detail || 'Request failed'),
+                    message,
                 });
             } catch (e) {
                 this._intel?.pushAlert({ type: 'warn', node_id: id, message: String(e.message || e) });

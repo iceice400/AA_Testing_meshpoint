@@ -30,6 +30,7 @@
             this._traceMeta = new Map();
             this._positionHistory = new Map();
             this._mobile = new Map();
+            this._txReady = null;
         }
 
         get queueSize() {
@@ -48,6 +49,10 @@
 
         isQueued(nodeId) {
             return this._queue.some((e) => e.nodeId === nodeId);
+        }
+
+        setTxReady(ready) {
+            this._txReady = ready;
         }
 
         clearQueue() {
@@ -72,11 +77,32 @@
         enqueue(nodeId, reason = 'manual', priority = 5) {
             if (this._observer) return false;
             if (this._queue.some((e) => e.nodeId === nodeId)) return false;
-            this._queue.push({ nodeId, reason, priority, enqueuedAt: Date.now(), state: 'pending' });
+            this._queue.push({
+                nodeId,
+                reason,
+                priority,
+                force: reason === 'manual',
+                enqueuedAt: Date.now(),
+                state: 'pending',
+            });
             this._queue.sort((a, b) => b.priority - a.priority || a.enqueuedAt - b.enqueuedAt);
             this._onQueueChange(this.getQueue(), this.getState());
             if (!this._draining) this.drainQueue();
             return true;
+        }
+
+        /** Immediate traceroute for operator ↯ button (bypasses queue). */
+        async traceNode(nodeId, { force = true, reason = 'manual' } = {}) {
+            if (this._observer) {
+                this._onAlert({
+                    type: 'warn',
+                    node_id: nodeId,
+                    node_name: nodeId,
+                    message: 'Observer mode — traceroute disabled.',
+                });
+                return { success: false, error: 'observer' };
+            }
+            return this._fireTrace(nodeId, { force, reason });
         }
 
         pollAll(nodes) {
@@ -172,6 +198,97 @@
             return this.isStatic(nodeId);
         }
 
+        async _fireTrace(nodeId, { force = false, reason = 'auto' } = {}) {
+            if (this._txReady === false) {
+                this._onAlert({
+                    type: 'warn',
+                    node_id: nodeId,
+                    node_name: nodeId,
+                    message: 'Meshtastic TX unavailable — enable onboard TX for traceroute.',
+                });
+                return { success: false, error: 'TX unavailable' };
+            }
+
+            const qs = force ? '?force=true' : '';
+            const url = `/api/analytics/topology/traceroute/${encodeURIComponent(nodeId)}${qs}`;
+
+            this._onAlert({
+                type: 'route',
+                node_id: nodeId,
+                node_name: nodeId,
+                message: `[RouteRequest] Traceroute → ${nodeId} (${reason}${force ? ', force' : ''}).`,
+            });
+
+            try {
+                const res = await fetch(url, {
+                    method: 'POST',
+                    credentials: 'same-origin',
+                });
+                const data = await res.json().catch(() => ({}));
+
+                if (res.status === 401 || res.status === 403) {
+                    this._onAlert({
+                        type: 'warn',
+                        node_id: nodeId,
+                        node_name: nodeId,
+                        message: res.status === 403
+                            ? 'Admin login required for traceroute.'
+                            : 'Sign in to send traceroute.',
+                    });
+                    return { success: false, error: data.detail || 'auth required' };
+                }
+
+                if (res.status === 503) {
+                    this._onAlert({
+                        type: 'warn',
+                        node_id: nodeId,
+                        node_name: nodeId,
+                        message: data.detail || 'Topology TX not configured on this node.',
+                    });
+                    return { success: false, error: data.detail };
+                }
+
+                if (data.skipped) {
+                    const wait = data.cooldown_remaining_s || 30;
+                    this._onAlert({
+                        type: 'warn',
+                        node_id: nodeId,
+                        node_name: nodeId,
+                        message: `Traceroute on cooldown — retry in ~${wait}s.`,
+                    });
+                    return data;
+                }
+
+                if (!res.ok || !data.success) {
+                    this._onAlert({
+                        type: 'warn',
+                        node_id: nodeId,
+                        node_name: nodeId,
+                        message: data.detail || data.error || `Traceroute failed (${res.status}).`,
+                    });
+                    return { success: false, error: data.detail || data.error };
+                }
+
+                this._lastTraceAt.set(nodeId, Date.now());
+                this._onAlert({
+                    type: 'info',
+                    node_id: nodeId,
+                    node_name: nodeId,
+                    message: 'Traceroute sent — watch for reply on air.',
+                });
+                return data;
+            } catch (e) {
+                console.error('SmartPoller trace failed:', e);
+                this._onAlert({
+                    type: 'warn',
+                    node_id: nodeId,
+                    node_name: nodeId,
+                    message: `Traceroute error: ${e.message || e}`,
+                });
+                return { success: false, error: String(e.message || e) };
+            }
+        }
+
         async drainQueue() {
             if (this._draining || !this._queue.length || this._observer) return;
             this._draining = true;
@@ -182,25 +299,10 @@
                 entry.state = 'sending';
                 this._onQueueChange(this.getQueue(), this.getState());
 
-                this._onAlert({
-                    type: 'route',
-                    node_id: entry.nodeId,
-                    node_name: entry.nodeId,
-                    message: `[RouteRequest] Auto-traceroute fired — reason: ${entry.reason}.`,
+                await this._fireTrace(entry.nodeId, {
+                    force: entry.force === true,
+                    reason: entry.reason,
                 });
-
-                try {
-                    const res = await fetch(
-                        `/api/analytics/topology/traceroute/${encodeURIComponent(entry.nodeId)}`,
-                        { method: 'POST' },
-                    );
-                    const data = await res.json().catch(() => ({}));
-                    if (res.ok && data.success) {
-                        this._lastTraceAt.set(entry.nodeId, Date.now());
-                    }
-                } catch (e) {
-                    console.error('SmartPoller trace failed:', e);
-                }
 
                 this._queue.shift();
                 this._onQueueChange(this.getQueue(), this.getState());

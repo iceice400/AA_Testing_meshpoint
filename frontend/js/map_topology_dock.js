@@ -181,7 +181,10 @@ class MapTopologyDock {
             statusEl.textContent = 'Polling router nodes…';
         }
         try {
-            const res = await fetch('/api/analytics/topology/poll', { method: 'POST' });
+            const res = await fetch('/api/analytics/topology/poll', {
+                method: 'POST',
+                credentials: 'same-origin',
+            });
             const data = await res.json();
             if (!res.ok) throw new Error(data.detail || data.error || 'Poll failed');
             const msg = `Sent ${data.polled || 0} traceroute${data.polled === 1 ? '' : 's'}`

@@ -523,6 +523,52 @@ class TxService:
             packet_bytes, packet_id, label=f"traceroute to {dest_label}"
         )
 
+    async def send_position_request(
+        self, destination: int | str, *, channel: int = 0
+    ) -> SendResult:
+        """Request a POSITION reply from a remote node (Meshtastic wantResponse)."""
+        if not self.meshtastic_enabled:
+            return SendResult(success=False, protocol="meshtastic", error="TX unavailable")
+
+        builder = self._get_builder()
+        if builder is None or not hasattr(builder, "build_position_request"):
+            return SendResult(success=False, protocol="meshtastic", error="Builder unavailable")
+
+        dest_int = self._resolve_destination(destination, Protocol.MESHTASTIC)
+        if dest_int == BROADCAST_ADDR_MT:
+            return SendResult(
+                success=False, protocol="meshtastic", error="Invalid position request destination"
+            )
+
+        packet_id = self._next_packet_id()
+        channel_hash, channel_key = self._resolve_channel(channel)
+        recipient_pubkey = None
+        if self._crypto is not None:
+            recipient_pubkey = self._crypto.lookup_public_key(dest_int)
+
+        hop_limit = self._config.hop_limit if self._config else DEFAULT_HOP_LIMIT
+        packet_bytes = builder.build_position_request(
+            source_id=self._source_node_id,
+            dest=dest_int,
+            packet_id=packet_id,
+            channel_key=channel_key,
+            channel_hash=channel_hash if recipient_pubkey is None else 0,
+            hop_limit=hop_limit,
+            hop_start=hop_limit,
+            recipient_public_key=recipient_pubkey,
+        )
+        if packet_bytes is None:
+            return SendResult(
+                success=False, protocol="meshtastic", error="Position request build failed"
+            )
+
+        dest_label = (
+            destination if isinstance(destination, str) else f"{destination:08x}"
+        )
+        return await self._send_built_packet(
+            packet_bytes, packet_id, label=f"position request to {dest_label}"
+        )
+
     async def send_telemetry(
         self,
         *,

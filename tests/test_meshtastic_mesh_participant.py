@@ -67,6 +67,19 @@ class TestMeshtasticMeshParticipantBuilder(unittest.TestCase):
         self.assertEqual(decoded.decoded_payload.get("request_id"), request_id)
         self.assertEqual(decoded.decoded_payload.get("snr_back"), [30])
 
+    def test_position_request_carries_request_id(self):
+        request_id = 0x33445566
+        packet = self.builder.build_position_request(
+            source_id=self.source_id,
+            dest=self.dest_id,
+            packet_id=request_id,
+        )
+        self.assertIsNotNone(packet)
+        decoded = self.decoder.decode(packet)
+        assert decoded is not None
+        self.assertEqual(decoded.packet_type.value, "position")
+        self.assertEqual(decoded.decoded_payload.get("request_id"), request_id)
+
     def test_traceroute_reply_preserves_inbound_hops(self):
         from src.models.packet import Packet, PacketType, Protocol
         from src.transmit.tx_service import TxService

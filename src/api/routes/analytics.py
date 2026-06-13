@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, Awaitable, Callable, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
@@ -23,6 +23,8 @@ _traffic_monitor: TrafficMonitor | None = None
 _packet_repo: PacketRepository | None = None
 _node_repo: NodeRepository | None = None
 _topology_poller: TopologyPoller | None = None
+_send_position_request: Optional[Callable[[str], Awaitable[Any]]] = None
+_meshtastic_tx_enabled: bool = False
 _infer_dark: bool = True
 
 
@@ -33,15 +35,20 @@ def init_routes(
     node_repo: NodeRepository | None = None,
     topology_poller: TopologyPoller | None = None,
     infer_dark_positions: bool = True,
+    *,
+    send_position_request: Optional[Callable[[str], Awaitable[Any]]] = None,
+    meshtastic_tx_enabled: bool = False,
 ) -> None:
     global _signal_analyzer, _traffic_monitor, _packet_repo, _node_repo
-    global _topology_poller, _infer_dark
+    global _topology_poller, _infer_dark, _send_position_request, _meshtastic_tx_enabled
     _signal_analyzer = signal_analyzer
     _traffic_monitor = traffic_monitor
     _packet_repo = packet_repo
     _node_repo = node_repo
     _topology_poller = topology_poller
     _infer_dark = infer_dark_positions
+    _send_position_request = send_position_request
+    _meshtastic_tx_enabled = meshtastic_tx_enabled
 
 
 @router.get("/traffic")
@@ -132,9 +139,23 @@ async def _apply_node_metadata(nodes: dict[str, dict]) -> tuple[list[str], list[
 
 @router.get("/topology/status")
 async def topology_poll_status():
+    base: dict[str, Any] = {
+        "meshtastic_tx_enabled": _meshtastic_tx_enabled,
+        "traceroute_available": (
+            _topology_poller is not None and _meshtastic_tx_enabled
+        ),
+        "position_request_available": (
+            _send_position_request is not None and _meshtastic_tx_enabled
+        ),
+    }
     if _topology_poller is None:
-        return {"enabled": False, "poll_interval_minutes": 15, "max_polls_per_cycle": 10}
-    return _topology_poller.status.to_dict()
+        return {
+            **base,
+            "enabled": False,
+            "poll_interval_minutes": 15,
+            "max_polls_per_cycle": 10,
+        }
+    return {**base, **_topology_poller.status.to_dict()}
 
 
 @router.post("/topology/poll")
@@ -159,6 +180,31 @@ async def topology_traceroute_node(
     if not result.get("success") and not result.get("skipped"):
         raise HTTPException(status_code=502, detail=result.get("error") or "Traceroute failed")
     return result
+
+
+@router.post("/topology/position/{node_id}")
+async def topology_position_request(
+    node_id: str,
+    _claims: SessionClaims = Depends(require_admin),
+):
+    if _send_position_request is None or not _meshtastic_tx_enabled:
+        raise HTTPException(
+            status_code=503,
+            detail="Meshtastic TX unavailable for position requests",
+        )
+    normalized = node_id.strip().lower().lstrip("!")
+    result = await _send_position_request(normalized)
+    ok = getattr(result, "success", False)
+    if not ok:
+        raise HTTPException(
+            status_code=502,
+            detail=getattr(result, "error", None) or "Position request failed",
+        )
+    return {
+        "success": True,
+        "node_id": normalized,
+        "packet_id": getattr(result, "packet_id", None),
+    }
 
 
 @router.get("/topology/channels")
