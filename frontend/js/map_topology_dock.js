@@ -1,30 +1,42 @@
 /**
- * Collapsible operator dock for the dashboard smart topology map.
+ * Operator panel for the Topology tab (stats, filters, unplotted, alerts).
  */
 class MapTopologyDock {
     constructor(hostId, store, options = {}) {
         this._host = document.getElementById(hostId);
         this._store = store;
-        this._onOpenLogical = options.onOpenLogical || null;
+        this._embedded = options.embedded === true;
         this._onSelectNode = options.onSelectNode || null;
         this._onSelectDark = options.onSelectDark || null;
         this._alerts = [];
         this._maxAlerts = 40;
-        this._collapsed = false;
+        this._collapsed = !this._embedded;
         this._built = false;
         if (this._host && this._store) {
+            if (this._embedded) {
+                this._host.classList.add('topo-operator-dock');
+            }
             this._build();
+            if (!this._embedded) {
+                this._host.classList.add('map-topology-dock--collapsed');
+            }
             this._store.onChange(() => this.renderStats());
         }
     }
 
     _build() {
         if (!this._host || this._built) return;
+        const collapseBtn = this._embedded
+            ? ''
+            : `<button type="button" class="map-dock__collapse" id="map-dock-collapse" aria-expanded="false" title="Collapse panel">▶</button>`;
+        const logicalBtn = this._embedded
+            ? ''
+            : `<button type="button" class="map-dock-btn" id="dock-logical">Logical graph</button>`;
         this._host.innerHTML = `
             <div class="map-dock">
                 <header class="map-dock__header">
-                    <span class="map-dock__title">Topology</span>
-                    <button type="button" class="map-dock__collapse" id="map-dock-collapse" aria-expanded="true" title="Collapse panel">◀</button>
+                    <span class="map-dock__title">${this._embedded ? 'Operator panel' : 'Topology'}</span>
+                    ${collapseBtn}
                 </header>
                 <div class="map-dock__body" id="map-dock-body">
                     <div class="map-dock__stats">
@@ -71,10 +83,12 @@ class MapTopologyDock {
                     </div>
 
                     <div class="map-dock__actions">
+                        <button type="button" class="map-dock-btn map-dock-btn--primary" id="dock-poll" title="Send traceroute probes to router nodes">Poll routes</button>
                         <button type="button" class="map-dock-btn map-dock-btn--primary" id="dock-export">Export JSON</button>
-                        <button type="button" class="map-dock-btn" id="dock-logical">Logical graph</button>
+                        ${logicalBtn}
                         <button type="button" class="map-dock-btn" id="dock-clear-alerts">Clear alerts</button>
                     </div>
+                    <div id="dock-poll-status" class="map-dock-poll-status" hidden></div>
 
                     <div class="map-dock__section">
                         <div class="map-dock__section-title">Unplotted nodes <span id="dock-unplotted-count" class="map-dock-badge">0</span></div>
@@ -102,6 +116,7 @@ class MapTopologyDock {
             this._host.classList.toggle('map-topology-dock--collapsed', this._collapsed);
             collapse.setAttribute('aria-expanded', String(!this._collapsed));
             collapse.textContent = this._collapsed ? '▶' : '◀';
+            setTimeout(() => window.dispatchEvent(new Event('resize')), 220);
         });
 
         const rssi = document.getElementById('dock-rssi');
@@ -153,6 +168,43 @@ class MapTopologyDock {
             this._alerts = [];
             this._renderAlerts();
         });
+
+        document.getElementById('dock-poll')?.addEventListener('click', () => this._pollTopology());
+    }
+
+    async _pollTopology() {
+        const statusEl = document.getElementById('dock-poll-status');
+        const btn = document.getElementById('dock-poll');
+        if (btn) btn.disabled = true;
+        if (statusEl) {
+            statusEl.hidden = false;
+            statusEl.textContent = 'Polling router nodes…';
+        }
+        try {
+            const res = await fetch('/api/analytics/topology/poll', { method: 'POST' });
+            const data = await res.json();
+            if (!res.ok) throw new Error(data.detail || data.error || 'Poll failed');
+            const msg = `Sent ${data.polled || 0} traceroute${data.polled === 1 ? '' : 's'}`
+                + (data.skipped ? ` · ${data.skipped} on cooldown` : '');
+            if (statusEl) statusEl.textContent = msg;
+            this.pushAlert({
+                type: 'info',
+                node_id: 'system',
+                node_name: 'TOPOLOGY',
+                message: msg,
+            });
+            setTimeout(() => this._store?.refreshFromApi(), 4000);
+        } catch (err) {
+            if (statusEl) statusEl.textContent = String(err.message || err);
+            this.pushAlert({
+                type: 'warn',
+                node_id: 'system',
+                node_name: 'TOPOLOGY',
+                message: `Poll failed: ${err.message || err}`,
+            });
+        } finally {
+            if (btn) btn.disabled = false;
+        }
     }
 
     renderStats() {

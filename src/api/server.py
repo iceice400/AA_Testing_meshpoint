@@ -11,6 +11,7 @@ from fastapi.staticfiles import StaticFiles
 from src._so_compat_check import warn_if_stale_so_files
 from src.analytics.network_mapper import NetworkMapper
 from src.analytics.signal_analyzer import SignalAnalyzer
+from src.analytics.topology_poller import TopologyPoller
 from src.analytics.traffic_monitor import TrafficMonitor
 from src.api.alert_emitter import AlertEmitter, build_alert_payload
 from src.api.audit import AuditLogWriter
@@ -108,6 +109,7 @@ noise_floor_tracker = NoiseFloorTracker()
 _noise_floor_emitter_task = None
 _spectral_scan_service: SpectralScanService | None = None
 _webhook_engine: WebhookEngine | None = None
+_topology_poller: TopologyPoller | None = None
 
 
 def create_app(config: AppConfig | None = None) -> FastAPI:
@@ -288,6 +290,12 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
 
             storm_guard.set_on_quarantine(_on_storm_quarantine)
 
+        global _topology_poller
+        _topology_poller = _build_topology_poller(
+            config, tx_service, pipeline.node_repo
+        )
+        _topology_poller.start()
+
         _init_routes(
             pipeline,
             config,
@@ -297,6 +305,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
             message_repo,
             webhook_engine=_webhook_engine,
             admin_reader=admin_reader,
+            topology_poller=_topology_poller,
         )
         _init_dangerous_registry(pipeline)
         print_banner(config)
@@ -318,6 +327,8 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
             await position_broadcaster.stop()
         if _webhook_engine is not None:
             await _webhook_engine.stop()
+        if _topology_poller is not None:
+            await _topology_poller.stop()
         await alert_emitter.stop()
         await upstream.stop()
         await pipeline.stop()
@@ -1306,6 +1317,53 @@ def _setup_message_interception(
     coord.on_packet(on_text_packet)
 
 
+def _build_topology_poller(
+    config: AppConfig,
+    tx_service: TxService | None,
+    node_repo,
+) -> TopologyPoller:
+    """Wire Tier B active traceroute polling."""
+    topo_cfg = config.topology
+    our_id: str | None = None
+    if tx_service is not None and tx_service.meshtastic_enabled:
+        our_id = f"{tx_service.source_node_id:08x}"
+
+    async def list_targets() -> list[str]:
+        if node_repo is None:
+            return []
+        targets: list[str] = []
+        for node in await node_repo.get_all():
+            nid = node.node_id
+            if not nid:
+                continue
+            if our_id and nid.lower() == our_id.lower():
+                continue
+            if TopologyPoller.is_router_role(node.role):
+                targets.append(nid)
+        return targets
+
+    async def send_traceroute(node_id: str):
+        if tx_service is None:
+            from src.transmit.tx_service import SendResult
+            return SendResult(
+                success=False, protocol="meshtastic", error="TX unavailable"
+            )
+        return await tx_service.send_traceroute_request(node_id)
+
+    enabled = (
+        topo_cfg.poll_enabled
+        and tx_service is not None
+        and tx_service.meshtastic_enabled
+    )
+    return TopologyPoller(
+        enabled=enabled,
+        poll_interval_minutes=topo_cfg.poll_interval_minutes,
+        max_polls_per_cycle=topo_cfg.max_polls_per_cycle,
+        send_traceroute=send_traceroute,
+        list_targets=list_targets,
+    )
+
+
 def _init_routes(
     coord: PipelineCoordinator,
     config: AppConfig,
@@ -1315,6 +1373,7 @@ def _init_routes(
     message_repo: MessageRepository | None = None,
     webhook_engine: WebhookEngine | None = None,
     admin_reader: AdminConfigReader | None = None,
+    topology_poller: TopologyPoller | None = None,
 ) -> None:
     identity_routes.init_routes(identity, auth_subsystem.service)
     network_mapper = NetworkMapper(coord.node_repo)
@@ -1333,6 +1392,8 @@ def _init_routes(
         traffic_monitor,
         coord.packet_repo,
         coord.node_repo,
+        topology_poller=topology_poller,
+        infer_dark_positions=config.topology.infer_dark_positions,
     )
     device.init_routes(identity, ws_manager, coord.relay_manager)
     telemetry.init_routes(coord.telemetry_repo)

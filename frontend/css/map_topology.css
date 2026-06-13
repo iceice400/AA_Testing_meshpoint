@@ -198,6 +198,13 @@
     background: rgba(0, 229, 160, 0.08);
 }
 
+.map-dock-poll-status {
+    font-size: 0.58rem;
+    font-family: var(--font-mono);
+    color: var(--text-muted);
+    line-height: 1.35;
+}
+
 .map-dock-badge {
     font-size: 0.55rem;
     color: var(--accent-cyan);
@@ -369,8 +376,17 @@
     flex: 1;
     overflow: hidden;
     display: flex;
-    flex-direction: column;
+    flex-direction: row;
     min-height: 0;
+    padding: 0;
+}
+
+.panel--map-topology .map-topology-dock {
+    order: 0;
+}
+
+.panel--map-topology .map-panel__map-wrap {
+    order: 1;
 }
 
 .dark-stub-marker {

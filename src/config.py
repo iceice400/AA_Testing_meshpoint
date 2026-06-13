@@ -76,6 +76,16 @@ class RadioConfig:
 
 
 @dataclass
+class TopologyConfig:
+    """Active topology polling and dark-node inference (Tier B/C)."""
+
+    poll_enabled: bool = False
+    poll_interval_minutes: int = 15
+    max_polls_per_cycle: int = 10
+    infer_dark_positions: bool = True
+
+
+@dataclass
 class SignalHealthConfig:
     """Thresholds for per-node RSSI sparkline health badges (PR 05)."""
 
@@ -400,6 +410,7 @@ class AppConfig:
     automation: AutomationConfig = field(default_factory=AutomationConfig)
     stray_frames: StrayFramesConfig = field(default_factory=StrayFramesConfig)
     signal_health: SignalHealthConfig = field(default_factory=SignalHealthConfig)
+    topology: TopologyConfig = field(default_factory=TopologyConfig)
 
 
 def _resolve_radio_frequency(radio: "RadioConfig") -> None:
@@ -487,6 +498,7 @@ def _apply_yaml(cfg: AppConfig, path: Path) -> None:
         "automation": cfg.automation,
         "stray_frames": cfg.stray_frames,
         "signal_health": cfg.signal_health,
+        "topology": cfg.topology,
     }
 
     unknown_keys: list[str] = []

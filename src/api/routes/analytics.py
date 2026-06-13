@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import json
 from datetime import datetime, timedelta, timezone
+from typing import Any
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Query
 
+from src.analytics.dark_node_locator import compute_topo_centroid_estimates
 from src.analytics.signal_analyzer import SignalAnalyzer
+from src.analytics.topology_poller import TopologyPoller
 from src.analytics.traffic_monitor import TrafficMonitor
 from src.storage.node_repository import NodeRepository
 from src.storage.packet_repository import PacketRepository
@@ -16,6 +19,8 @@ _signal_analyzer: SignalAnalyzer | None = None
 _traffic_monitor: TrafficMonitor | None = None
 _packet_repo: PacketRepository | None = None
 _node_repo: NodeRepository | None = None
+_topology_poller: TopologyPoller | None = None
+_infer_dark: bool = True
 
 
 def init_routes(
@@ -23,12 +28,17 @@ def init_routes(
     traffic_monitor: TrafficMonitor,
     packet_repo: PacketRepository | None = None,
     node_repo: NodeRepository | None = None,
+    topology_poller: TopologyPoller | None = None,
+    infer_dark_positions: bool = True,
 ) -> None:
     global _signal_analyzer, _traffic_monitor, _packet_repo, _node_repo
+    global _topology_poller, _infer_dark
     _signal_analyzer = signal_analyzer
     _traffic_monitor = traffic_monitor
     _packet_repo = packet_repo
     _node_repo = node_repo
+    _topology_poller = topology_poller
+    _infer_dark = infer_dark_positions
 
 
 @router.get("/traffic")
@@ -62,6 +72,8 @@ def _empty_topology() -> dict:
         "edges": [],
         "routes": [],
         "edge_sources": [],
+        "unplotted": [],
+        "estimates": [],
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "stats": {
             "neighborinfo_packets": 0,
@@ -77,6 +89,56 @@ def _edge_key(a: str, b: str) -> str:
 
 def _is_weak(rssi: float | None) -> bool:
     return rssi is not None and rssi < -110
+
+
+async def _apply_node_metadata(nodes: dict[str, dict]) -> tuple[list[str], list[dict]]:
+    """Return unplotted ids and GPS-enriched node list for dark-node inference."""
+    if not _node_repo:
+        node_list = list(nodes.values())
+        unplotted = [
+            n["id"] for n in node_list
+            if n.get("latitude") is None and n.get("longitude") is None
+        ]
+        return unplotted, node_list
+
+    unplotted: list[str] = []
+    for node in await _node_repo.get_all():
+        nid = node.node_id
+        if not nid:
+            continue
+        rec = nodes.get(nid)
+        if rec is None:
+            rec = {
+                "id": nid,
+                "label": node.display_name or node.long_name or node.short_name or f"!{nid[-4:]}",
+                "protocol": node.protocol or "meshtastic",
+                "packet_count": 0,
+                "latest_rssi": None,
+            }
+            nodes[nid] = rec
+        if node.latitude is not None and node.longitude is not None:
+            rec["latitude"] = node.latitude
+            rec["longitude"] = node.longitude
+        if node.role:
+            rec["role"] = node.role
+        if rec.get("latitude") is None or rec.get("longitude") is None:
+            unplotted.append(nid)
+
+    return unplotted, list(nodes.values())
+
+
+@router.get("/topology/status")
+async def topology_poll_status():
+    if _topology_poller is None:
+        return {"enabled": False, "poll_interval_minutes": 15, "max_polls_per_cycle": 10}
+    return _topology_poller.status.to_dict()
+
+
+@router.post("/topology/poll")
+async def topology_poll_now(force: bool = Query(False)):
+    if _topology_poller is None:
+        raise HTTPException(status_code=503, detail="Topology poller not configured")
+    return await _topology_poller.poll_now(force=force)
 
 
 @router.get("/topology")
@@ -217,14 +279,32 @@ async def network_topology(hours: int = Query(24, ge=1, le=168)):
                             "rssi": rssi,
                             "snr": snr,
                             "weak": _is_weak(rssi),
-                            "last_seen": row["timestamp"],
-                        }
+                        "last_seen": row["timestamp"],
+                    }
+
+    unplotted_ids, node_list = await _apply_node_metadata(nodes)
+    edge_list = list(edges.values())
+    estimates: list[dict[str, Any]] = []
+    if _infer_dark and unplotted_ids:
+        estimates = compute_topo_centroid_estimates(node_list, edge_list)
+    unplotted_detail = [
+        {
+            "id": nid,
+            "label": nodes[nid].get("label") or f"!{nid[-4:]}",
+            "role": nodes[nid].get("role"),
+            "latest_rssi": nodes[nid].get("latest_rssi"),
+        }
+        for nid in unplotted_ids
+        if nid in nodes
+    ]
 
     return {
-        "nodes": list(nodes.values()),
-        "edges": list(edges.values()),
+        "nodes": node_list,
+        "edges": edge_list,
         "routes": routes,
         "edge_sources": sorted(edge_sources),
+        "unplotted": unplotted_detail,
+        "estimates": estimates,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "stats": stats,
     }

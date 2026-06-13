@@ -34,6 +34,8 @@
             this._listeners = new Set();
             this._selectedNodeId = null;
 
+            this._estimates = new Map();
+
             this.filters = {
                 minRssi: -130,
                 minSnr: -20,
@@ -123,6 +125,10 @@
             this._routes = Array.isArray(data.routes) ? data.routes.slice() : [];
             this._edgeSources = Array.isArray(data.edge_sources) ? data.edge_sources.slice() : [];
             this._stats = data.stats || {};
+            this._estimates = new Map();
+            for (const est of data.estimates || []) {
+                if (est?.id) this._estimates.set(est.id, est);
+            }
 
             for (const n of data.nodes || []) {
                 const id = n.id;
@@ -326,6 +332,7 @@
                 edge_sources: this._edgeSources,
                 stats: this._stats,
                 unplotted,
+                estimates: [...this._estimates.values()],
                 mapped,
                 dark: unplotted.length,
                 poor_edges: poorEdges,

@@ -194,7 +194,7 @@ html, body {
 
 .dashboard__main {
     display: grid;
-    grid-template-columns: 2fr 1fr;
+    grid-template-columns: minmax(0, 1fr) minmax(220px, 280px);
     gap: 0.5rem;
     flex: 1;
     min-height: 0;
@@ -236,6 +236,27 @@ html, body {
     position: relative;
 }
 
+.panel__body--map {
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    padding: 0;
+}
+
+.panel--map {
+    height: 100%;
+    min-height: 0;
+}
+
+.panel--map .map-container,
+.panel--map #map {
+    flex: 1;
+    min-height: 0;
+    height: 100%;
+    width: 100%;
+}
+
 /* ---- Map ---- */
 /*
  * Map zero-scrollbar invariant: Leaflet's zoom transitions briefly
@@ -245,7 +266,23 @@ html, body {
  * Locking overflow on each layer (panel body, map container, leaflet
  * container) hides the overshoot during the transition window.
  */
-.dashboard__map { min-height: 0; overflow: hidden; }
+.dashboard__map {
+    min-height: 0;
+    overflow: hidden;
+    height: 100%;
+}
+
+.dashboard__map .panel {
+    height: 100%;
+    min-height: 0;
+}
+
+.dashboard__map #map.panel__body {
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+    padding: 0;
+}
 .dashboard__side { min-height: 0; overflow: hidden; }
 .map-container { min-height: 0; overflow: hidden; position: relative; }
 

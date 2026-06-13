@@ -10,6 +10,8 @@ class NodeMap {
     constructor(containerId, options = {}) {
         this._containerId = containerId;
         this._store = options.store || null;
+        this._topologyEnabled = options.topology === true;
+        this._viewStorageKey = options.viewStorageKey || MAP_VIEW_STORAGE_KEY;
         this._map = null;
         this._markerGroup = null;
         this._deviceMarker = null;
@@ -28,7 +30,9 @@ class NodeMap {
         const el = document.getElementById(this._containerId);
         if (!el) return;
 
-        this._mapWrap = el.closest('.map-panel__map-wrap') || el.parentElement;
+        this._mapWrap = el.closest('.map-panel__map-wrap')
+            || el.closest('.topo-map-panel')
+            || el.parentElement;
 
         this._map = L.map(this._containerId, {
             zoomControl: true,
@@ -52,7 +56,7 @@ class NodeMap {
         this._wireResizeRecalc();
 
         this._topologyLayer = L.layerGroup();
-        this._topologyVisible = true;
+        this._topologyVisible = false;
         this._darkStubLayer = L.layerGroup();
         this._coverageLayer = L.layerGroup();
         this._coverageVisible = false;
@@ -76,23 +80,28 @@ class NodeMap {
             },
         });
         this._map.addLayer(this._markerGroup);
-        this._map.addLayer(this._topologyLayer);
-        this._darkOrbitLayer = L.layerGroup().addTo(this._map);
 
-        this._topologyHintEl = document.createElement('div');
-        this._topologyHintEl.className = 'map-topology-hint';
-        this._topologyHintEl.hidden = true;
-        this._topologyHintEl.setAttribute('role', 'status');
-        this._topologyHintEl.innerHTML =
-            'Topology links need GPS on both nodes — use the dock list or <strong>Logical graph</strong> for unplotted nodes.';
-        el.appendChild(this._topologyHintEl);
+        if (this._topologyEnabled) {
+            this._map.addLayer(this._topologyLayer);
+            this._darkOrbitLayer = L.layerGroup().addTo(this._map);
 
-        this._buildMapChrome();
+            this._topologyHintEl = document.createElement('div');
+            this._topologyHintEl.className = 'map-topology-hint';
+            this._topologyHintEl.hidden = true;
+            this._topologyHintEl.setAttribute('role', 'status');
+            this._topologyHintEl.innerHTML =
+                'Topology links need GPS on both nodes — use the sidebar list for unplotted nodes.';
+            el.appendChild(this._topologyHintEl);
 
-        if (this._store) {
-            this._unsubStore = this._store.onChange(() => {
-                this.renderTopology();
-            });
+            this._buildMapChrome();
+
+            if (this._store) {
+                this._unsubStore = this._store.onChange(() => {
+                    this.renderTopology();
+                });
+            }
+        } else {
+            this._initDashboardOverlays(el);
         }
 
         this._initialized = true;
@@ -115,8 +124,90 @@ class NodeMap {
         });
     }
 
+    _initDashboardOverlays(el) {
+        this._topologyHintEl = document.createElement('div');
+        this._topologyHintEl.className = 'map-topology-hint';
+        this._topologyHintEl.hidden = true;
+        this._topologyHintEl.setAttribute('role', 'status');
+        this._topologyHintEl.textContent =
+            'Topology links need GPS on both nodes — open the Topology tab for the logical graph.';
+        el.appendChild(this._topologyHintEl);
+
+        const overlays = {
+            'Topology Links': this._topologyLayer,
+            'Coverage View': this._coverageLayer,
+        };
+        L.control.layers(null, overlays, { position: 'topright', collapsed: false }).addTo(this._map);
+
+        this._map.on('overlayadd', (e) => {
+            if (e.layer === this._topologyLayer) {
+                this._topologyVisible = true;
+                this._loadTopology();
+            }
+            if (e.layer === this._coverageLayer) {
+                this._coverageVisible = true;
+                this._loadCoverage();
+            }
+        });
+        this._map.on('overlayremove', (e) => {
+            if (e.layer === this._topologyLayer) {
+                this._topologyVisible = false;
+                if (this._topologyHintEl) this._topologyHintEl.hidden = true;
+            }
+            if (e.layer === this._coverageLayer) {
+                this._coverageVisible = false;
+            }
+        });
+    }
+
+    async _loadTopology() {
+        try {
+            const res = await fetch('/api/analytics/topology?hours=24');
+            if (!res.ok) return;
+            const payload = await res.json();
+            const links = Array.isArray(payload)
+                ? payload
+                : (payload.edges || []);
+            this._topologyLayer.clearLayers();
+
+            let drawn = 0;
+            for (const link of links) {
+                const src = link.source;
+                const tgt = link.target;
+                const srcMarker = this._markers[src];
+                const tgtMarker = this._markers[tgt];
+                if (!srcMarker || !tgtMarker) continue;
+                drawn += 1;
+
+                const line = L.polyline(
+                    [srcMarker.getLatLng(), tgtMarker.getLatLng()],
+                    {
+                        color: '#f59e0b',
+                        weight: 1.5,
+                        opacity: 0.6,
+                        dashArray: '4, 4',
+                    },
+                );
+
+                const rssiLabel = link.rssi != null ? `RSSI: ${link.rssi} dBm` : '';
+                const snrLabel = link.snr != null ? `SNR: ${link.snr} dB` : '';
+                line.bindTooltip([
+                    `${src} ↔ ${tgt}`,
+                    rssiLabel,
+                    snrLabel,
+                ].filter(Boolean).join('<br>'));
+
+                this._topologyLayer.addLayer(line);
+            }
+
+            this._updateTopologyHint(links.length, drawn);
+        } catch (e) {
+            console.error('Topology load failed:', e);
+        }
+    }
+
     _buildMapChrome() {
-        if (!this._mapWrap) return;
+        if (!this._mapWrap || !this._topologyEnabled) return;
 
         this._badgesEl = document.createElement('div');
         this._badgesEl.className = 'map-status-badges';
@@ -159,7 +250,7 @@ class NodeMap {
             });
         });
 
-        const stripHost = document.getElementById('map-topology-status-host');
+        const stripHost = document.getElementById('topo-map-status-host');
         if (stripHost && window.StatusStrip) {
             this._statusStrip = new window.StatusStrip(stripHost, 'TOPO');
             this._statusStrip.mount();
@@ -183,7 +274,7 @@ class NodeMap {
 
     _loadSavedView() {
         try {
-            const raw = localStorage.getItem(MAP_VIEW_STORAGE_KEY);
+            const raw = localStorage.getItem(this._viewStorageKey);
             if (!raw) return null;
             const parsed = JSON.parse(raw);
             const lat = Number(parsed.lat);
@@ -204,7 +295,7 @@ class NodeMap {
         if (!this._map) return;
         try {
             const c = this._map.getCenter();
-            localStorage.setItem(MAP_VIEW_STORAGE_KEY, JSON.stringify({
+            localStorage.setItem(this._viewStorageKey, JSON.stringify({
                 lat: c.lat,
                 lon: c.lng,
                 zoom: this._map.getZoom(),
@@ -249,11 +340,15 @@ class NodeMap {
             this._hasFitBounds = true;
         }
 
-        this.renderTopology();
+        if (this._topologyEnabled) {
+            this.renderTopology();
+        } else if (this._topologyVisible) {
+            this._loadTopology();
+        }
     }
 
     renderTopology() {
-        if (!this._initialized || !this._store) return;
+        if (!this._topologyEnabled || !this._initialized || !this._store) return;
 
         const snap = this._store.getSnapshot();
         const showEdges = this._store.layers.edges !== false;
@@ -266,7 +361,7 @@ class NodeMap {
         }
 
         this._renderEdges(snap.edges, showEdges, mode);
-        this._renderDarkStubs(snap.unplotted, showDark);
+        this._renderDarkStubs(snap.unplotted, snap.estimates || [], showDark);
         this._updateLabels(showLabels);
         this._updateBadges(snap);
         this._updateStatusStrip(snap);
@@ -362,38 +457,64 @@ class NodeMap {
         return stored?.label || nodeId;
     }
 
-    _renderDarkStubs(unplotted, showDark) {
+    _renderDarkStubs(unplotted, estimates, showDark) {
         this._darkStubLayer.clearLayers();
         this._darkOrbitLayer.clearLayers();
         this._darkStubMarkers.clear();
 
         if (!showDark || !unplotted?.length) {
-            this._darkStubLayer.clearLayers();
-            this._darkOrbitLayer.clearLayers();
-            this._darkStubMarkers.clear();
             if (this._map.hasLayer(this._darkStubLayer)) {
                 this._map.removeLayer(this._darkStubLayer);
             }
             return;
         }
 
+        const estimateById = new Map((estimates || []).map((e) => [e.id, e]));
         const device = this._lastDevice;
-        if (!device?.latitude || !device?.longitude) return;
+        const hasDeviceGps = device?.latitude && device?.longitude;
+        const stubCenter = hasDeviceGps ? [device.latitude, device.longitude] : null;
 
-        const center = [device.latitude, device.longitude];
-        const orbit = L.circle(center, {
-            radius: 450,
-            className: 'dark-stub-orbit',
-            color: '#9b8aff',
-            weight: 1,
-            fill: false,
-            dashArray: '4, 4',
-            opacity: 0.45,
-        });
-        orbit.addTo(this._darkOrbitLayer);
+        let stubIndex = 0;
+        let usedStubRing = false;
 
-        unplotted.slice(0, 24).forEach((node, index) => {
-            const pos = this._stubPosition(center, node.id, index);
+        for (const node of unplotted.slice(0, 32)) {
+            const est = estimateById.get(node.id);
+            let pos;
+            let popupNote;
+
+            if (est?.lat != null && est.lng != null) {
+                pos = [est.lat, est.lng];
+                popupNote = `Estimated (${est.method || 'inference'}) · ±${Math.round(est.radius_m || 500)} m`;
+                if (est.radius_m) {
+                    L.circle(pos, {
+                        radius: est.radius_m,
+                        color: '#9b8aff',
+                        weight: 1,
+                        fillColor: '#9b8aff',
+                        fillOpacity: 0.08,
+                        dashArray: '4, 4',
+                    }).addTo(this._darkOrbitLayer);
+                }
+            } else if (stubCenter) {
+                if (!usedStubRing) {
+                    L.circle(stubCenter, {
+                        radius: 450,
+                        className: 'dark-stub-orbit',
+                        color: '#9b8aff',
+                        weight: 1,
+                        fill: false,
+                        dashArray: '4, 4',
+                        opacity: 0.45,
+                    }).addTo(this._darkOrbitLayer);
+                    usedStubRing = true;
+                }
+                pos = this._stubPosition(stubCenter, node.id, stubIndex);
+                stubIndex += 1;
+                popupNote = '<em>Stub position — not a GPS fix</em>';
+            } else {
+                continue;
+            }
+
             const marker = L.marker(pos, {
                 icon: L.divIcon({
                     html: '<div class="dark-stub-marker"></div>',
@@ -408,16 +529,16 @@ class NodeMap {
                 `GPS: off / unplotted<br>` +
                 `Links: ${node.edge_count || 0}<br>` +
                 `RSSI: ${node.latest_rssi != null ? `${node.latest_rssi} dBm` : '—'}<br>` +
-                `<em>Stub position — not a GPS fix</em>`,
+                popupNote,
             );
             marker.on('click', () => {
                 if (this._store) this._store.setSelectedNode(node.id);
             });
             marker.addTo(this._darkStubLayer);
             this._darkStubMarkers.set(node.id, marker);
-        });
+        }
 
-        if (!this._map.hasLayer(this._darkStubLayer)) {
+        if (!this._map.hasLayer(this._darkStubLayer) && this._darkStubMarkers.size) {
             this._map.addLayer(this._darkStubLayer);
         }
     }
@@ -770,6 +891,19 @@ class NodeMap {
                 const rssi = node.avg_rssi != null ? `${node.avg_rssi} dBm avg` : 'no RSSI';
                 circle.bindTooltip(`${label}<br>${rssi}<br>${node.packet_count || 0} pkts`);
                 this._coverageLayer.addLayer(circle);
+            }
+
+            const unplottedEl = document.getElementById('map-unplotted');
+            if (unplottedEl) {
+                const count = data.unplotted_count || 0;
+                if (count > 0) {
+                    unplottedEl.hidden = false;
+                    unplottedEl.textContent = `${count} unplotted`;
+                    unplottedEl.classList.add('map-unplotted--visible');
+                } else {
+                    unplottedEl.hidden = true;
+                    unplottedEl.classList.remove('map-unplotted--visible');
+                }
             }
         } catch (e) {
             console.error('Coverage load failed:', e);
