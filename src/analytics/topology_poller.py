@@ -10,6 +10,9 @@ from typing import Any, Callable, Optional
 
 logger = logging.getLogger(__name__)
 
+# Meshtastic 2.5.1+ minimum spacing between traceroute transmissions.
+FIRMWARE_TR_LIMIT_S = 30.0
+
 _ROUTER_ROLES = frozenset({"router", "repeater", "2", "4"})
 
 
@@ -83,6 +86,35 @@ class TopologyPoller:
                 pass
             self._task = None
 
+    async def trace_node(self, node_id: str, *, force: bool = False) -> dict[str, Any]:
+        """Send one traceroute to a specific node (operator or smart-poller)."""
+        if self._send is None:
+            return {"success": False, "error": "TX unavailable", "node_id": node_id}
+
+        now = time.time()
+        last = self._last_poll.get(node_id, 0.0)
+        if not force and (now - last) < self._interval_s:
+            return {
+                "success": False,
+                "skipped": True,
+                "node_id": node_id,
+                "cooldown_remaining_s": round(self._interval_s - (now - last)),
+            }
+
+        try:
+            result = await self._send(node_id)
+            ok = getattr(result, "success", False)
+            if ok:
+                self._last_poll[node_id] = now
+            err = None if ok else getattr(result, "error", "send failed")
+            return {
+                "success": ok,
+                "node_id": node_id,
+                "error": err,
+            }
+        except Exception as exc:
+            return {"success": False, "node_id": node_id, "error": str(exc)}
+
     async def poll_now(self, *, force: bool = False) -> dict[str, Any]:
         if self._send is None or self._list_targets is None:
             return {"polled": 0, "error": "TX or node list unavailable"}
@@ -110,7 +142,7 @@ class TopologyPoller:
                 if getattr(result, "success", False):
                     self._last_poll[node_id] = now
                     polled += 1
-                    await asyncio.sleep(0.8)
+                    await asyncio.sleep(max(FIRMWARE_TR_LIMIT_S, 0.8))
                 else:
                     err = getattr(result, "error", "send failed")
                     errors.append(f"{node_id}: {err}")

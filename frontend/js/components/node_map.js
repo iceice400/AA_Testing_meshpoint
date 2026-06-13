@@ -212,6 +212,7 @@ class NodeMap {
         this._badgesEl = document.createElement('div');
         this._badgesEl.className = 'map-status-badges';
         this._badgesEl.innerHTML = `
+            <span class="map-status-badge">Nodes <strong id="map-badge-nodes">0</strong></span>
             <span class="map-status-badge">Links <strong id="map-badge-links">0</strong></span>
             <span class="map-status-badge">Dark <strong id="map-badge-dark">0</strong></span>
             <span class="map-status-badge map-status-badge--warn" id="map-badge-warn" hidden>
@@ -517,10 +518,10 @@ class NodeMap {
 
             const marker = L.marker(pos, {
                 icon: L.divIcon({
-                    html: '<div class="dark-stub-marker"></div>',
+                    html: '<div class="dark-stub-marker dark-stub-marker--unknown"><span>?</span></div>',
                     className: '',
-                    iconSize: [10, 10],
-                    iconAnchor: [5, 5],
+                    iconSize: [18, 18],
+                    iconAnchor: [9, 9],
                 }),
                 zIndexOffset: 200,
             });
@@ -581,10 +582,12 @@ class NodeMap {
     }
 
     _updateBadges(snap) {
+        const nodesEl = document.getElementById('map-badge-nodes');
         const linksEl = document.getElementById('map-badge-links');
         const darkEl = document.getElementById('map-badge-dark');
         const warnWrap = document.getElementById('map-badge-warn');
         const warnTxt = document.getElementById('map-badge-warn-txt');
+        if (nodesEl) nodesEl.textContent = String(snap.mapped ?? snap.nodes?.length ?? 0);
         if (linksEl) linksEl.textContent = String(snap.edges.length);
         if (darkEl) darkEl.textContent = String(snap.dark);
 

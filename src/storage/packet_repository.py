@@ -275,6 +275,20 @@ class PacketRepository:
         )
         return [dict(row) for row in rows]
 
+    async def get_channel_hash_counts_since(self, since: str) -> list[dict]:
+        """Per-channel_hash packet counts for topology channel utilization."""
+        rows = await self._db.fetch_all(
+            """
+            SELECT channel_hash, COUNT(*) AS packet_count
+            FROM packets
+            WHERE timestamp >= ?
+            GROUP BY channel_hash
+            ORDER BY packet_count DESC
+            """,
+            (since,),
+        )
+        return [dict(row) for row in rows]
+
     async def cleanup_old(self, max_retained: int) -> int:
         total = await self.get_count()
         if total <= max_retained:

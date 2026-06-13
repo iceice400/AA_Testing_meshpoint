@@ -186,6 +186,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
 
         topologyStore.ingestPacket(packet);
+        window.topologyTab?.ingestPacket?.(packet);
 
         if (packet.packet_type === 'telemetry') {
             const batt = packet.decoded_payload?.battery_level

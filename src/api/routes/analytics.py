@@ -4,7 +4,10 @@ import json
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
+
+from src.api.auth.dependencies import require_admin
+from src.api.auth.jwt_session import SessionClaims
 
 from src.analytics.dark_node_locator import compute_topo_centroid_estimates
 from src.analytics.signal_analyzer import SignalAnalyzer
@@ -135,10 +138,47 @@ async def topology_poll_status():
 
 
 @router.post("/topology/poll")
-async def topology_poll_now(force: bool = Query(False)):
+async def topology_poll_now(
+    force: bool = Query(False),
+    _claims: SessionClaims = Depends(require_admin),
+):
     if _topology_poller is None:
         raise HTTPException(status_code=503, detail="Topology poller not configured")
     return await _topology_poller.poll_now(force=force)
+
+
+@router.post("/topology/traceroute/{node_id}")
+async def topology_traceroute_node(
+    node_id: str,
+    force: bool = Query(False),
+    _claims: SessionClaims = Depends(require_admin),
+):
+    if _topology_poller is None:
+        raise HTTPException(status_code=503, detail="Topology poller not configured")
+    result = await _topology_poller.trace_node(node_id.strip().lower().lstrip("!"), force=force)
+    if not result.get("success") and not result.get("skipped"):
+        raise HTTPException(status_code=502, detail=result.get("error") or "Traceroute failed")
+    return result
+
+
+@router.get("/topology/channels")
+async def topology_channel_counts(hours: int = Query(24, ge=1, le=168)):
+    if not _packet_repo:
+        return {"hours": hours, "channels": []}
+    since = (
+        datetime.now(timezone.utc) - timedelta(hours=hours)
+    ).isoformat()
+    rows = await _packet_repo.get_channel_hash_counts_since(since)
+    return {
+        "hours": hours,
+        "channels": [
+            {
+                "channel_hash": int(row.get("channel_hash") or 0),
+                "packet_count": int(row.get("packet_count") or 0),
+            }
+            for row in rows
+        ],
+    }
 
 
 @router.get("/topology")
@@ -236,6 +276,8 @@ async def network_topology(hours: int = Query(24, ge=1, le=168)):
             routes.append({
                 "source_id": source,
                 "route": route_ids,
+                "snr_towards": payload.get("snr_towards") or [],
+                "snr_back": payload.get("snr_back") or [],
                 "last_seen": row["timestamp"],
             })
             for idx in range(len(route_ids) - 1):

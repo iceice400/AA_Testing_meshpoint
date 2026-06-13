@@ -235,6 +235,15 @@
                         ts,
                     });
                 }
+                if (type === 'traceroute' && routeIds.length >= 2) {
+                    this._routes.unshift({
+                        source_id: sourceId,
+                        route: routeIds,
+                        snr_towards: payload.snr_towards || [],
+                        snr_back: payload.snr_back || [],
+                    });
+                    if (this._routes.length > 80) this._routes.length = 80;
+                }
             }
 
             this._pruneStaleEdges();
