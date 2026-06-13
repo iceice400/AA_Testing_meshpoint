@@ -539,6 +539,13 @@ class TxService:
             return SendResult(
                 success=False, protocol="meshtastic", error="Invalid position request destination"
             )
+        if dest_int < 0 or dest_int > 0xFFFFFFFF:
+            label = destination if isinstance(destination, str) else f"{destination:x}"
+            return SendResult(
+                success=False,
+                protocol="meshtastic",
+                error=f"Node ID {label!r} is not a valid 32-bit Meshtastic address",
+            )
 
         packet_id = self._next_packet_id()
         channel_hash, channel_key = self._resolve_channel(channel)

@@ -9,6 +9,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from src.api.auth.dependencies import require_admin
 from src.api.auth.jwt_session import SessionClaims
 
+from src.relay.node_id import is_valid_meshtastic_node_id, normalize_node_id
 from src.analytics.dark_node_locator import compute_topo_centroid_estimates
 from src.analytics.signal_analyzer import SignalAnalyzer
 from src.analytics.topology_poller import TopologyPoller
@@ -196,7 +197,15 @@ async def topology_position_request(
             status_code=503,
             detail="Meshtastic TX unavailable for position requests",
         )
-    normalized = node_id.strip().lower().lstrip("!")
+    normalized = normalize_node_id(node_id)
+    if not is_valid_meshtastic_node_id(normalized):
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"Invalid Meshtastic node ID {node_id!r} — position requests require "
+                "8 hex chars (MeshCore pubkey IDs are not supported)"
+            ),
+        )
     result = await _send_position_request(normalized)
     ok = getattr(result, "success", False)
     if not ok:

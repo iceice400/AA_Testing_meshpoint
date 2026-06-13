@@ -17,6 +17,7 @@
         darkInfOn: true,
         labelsOn: true,
         hours: 24,
+        protocolFilter: 'all',
     };
 
     class TopologySettings {

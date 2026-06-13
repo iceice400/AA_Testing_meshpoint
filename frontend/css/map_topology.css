@@ -339,6 +339,31 @@
     background: rgba(0, 229, 160, 0.1);
 }
 
+.map-proto-bar {
+    position: absolute;
+    top: 0.55rem;
+    right: 0.55rem;
+    z-index: 800;
+    display: flex;
+    align-items: center;
+    gap: 0.2rem;
+    padding: 0.25rem 0.4rem;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border);
+    background: rgba(10, 14, 23, 0.92);
+    backdrop-filter: blur(4px);
+}
+
+.map-proto-bar__label {
+    font-family: var(--font-mono);
+    font-size: 0.52rem;
+    font-weight: 700;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--text-muted);
+    margin-right: 0.15rem;
+}
+
 .map-status-badges {
     position: absolute;
     top: 0.5rem;

@@ -128,6 +128,8 @@
                             <div class="topo-leg"><span class="topo-leg-line topo-leg-line--mid"></span>Marginal (-90 to -110)</div>
                             <div class="topo-leg"><span class="topo-leg-line topo-leg-line--bad"></span>Weak (RSSI &lt; -110)</div>
                             <div class="topo-leg"><span class="topo-leg-line topo-leg-line--dark"></span>Inferred dark link</div>
+                            <div class="topo-leg"><span class="topo-leg-dot topo-leg-dot--mt"></span>Meshtastic (MT) — circle</div>
+                            <div class="topo-leg"><span class="topo-leg-dot topo-leg-dot--mc"></span>MeshCore (MC) — diamond</div>
                             <div class="topo-leg"><span class="topo-leg-dot topo-leg-dot--router"></span>Router / repeater</div>
                             <div class="topo-leg"><span class="topo-leg-dot topo-leg-dot--client"></span>Client</div>
                             <div class="topo-leg"><span class="topo-leg-dot topo-leg-dot--dark"></span>Dark / GPS-off node</div>

@@ -560,7 +560,13 @@ class MeshtasticPacketBuilder:
             flags |= 0x10
         flags |= (hop_start & 0x07) << 5
 
-        header = struct.pack("<III", dest, source_id, packet_id)
+        # Meshtastic radio header fields are unsigned 32-bit node/packet ids.
+        header = struct.pack(
+            "<III",
+            dest & 0xFFFFFFFF,
+            source_id & 0xFFFFFFFF,
+            packet_id & 0xFFFFFFFF,
+        )
         header += bytes([flags, channel_hash, 0x00, 0x00])
         return header
 

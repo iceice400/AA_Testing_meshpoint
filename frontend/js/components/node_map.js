@@ -38,6 +38,8 @@ class NodeMap {
         this._hopSegmentLines = new Map();
         this._darkStubMarkers = new Map();
         this._localNodeId = options.localNodeId || null;
+        this._settings = options.settings || null;
+        this._protocolFilter = options.settings?.get('protocolFilter') || 'all';
         this._darkOrbitLayer = null;
         this._initialized = false;
         this._hasFitBounds = false;
@@ -143,6 +145,12 @@ class NodeMap {
                 this.loadNodes(this._lastNodes, this._lastDevice);
             }
         });
+
+        if (this._settings) {
+            this._settingsUnsub = this._settings.onChange(() => {
+                this.setProtocolFilter(this._settings.get('protocolFilter'));
+            });
+        }
     }
 
     _initDashboardOverlays(el) {
@@ -271,6 +279,33 @@ class NodeMap {
         }
     }
 
+    setProtocolFilter(filter) {
+        const next = filter || 'all';
+        if (this._protocolFilter === next) return;
+        this._protocolFilter = next;
+        this._syncProtocolToggle();
+        if (this._lastNodes) {
+            this.loadNodes(this._lastNodes, this._lastDevice);
+        }
+    }
+
+    _syncProtocolToggle() {
+        if (!this._protoBarEl) return;
+        this._protoBarEl.querySelectorAll('[data-proto]').forEach((btn) => {
+            const on = btn.dataset.proto === (this._protocolFilter || 'all');
+            btn.classList.toggle('topo-proto-toggle__btn--active', on);
+            btn.setAttribute('aria-selected', on ? 'true' : 'false');
+        });
+    }
+
+    _filterByProtocol(nodes) {
+        if (!this._protocolFilter || this._protocolFilter === 'all') return nodes;
+        if (window.TopologyProtocol?.filterNodes) {
+            return window.TopologyProtocol.filterNodes(nodes, this._protocolFilter);
+        }
+        return nodes;
+    }
+
     setStore(store) {
         if (this._unsubStore) {
             this._unsubStore();
@@ -397,6 +432,32 @@ class NodeMap {
         `;
         this._mapWrap.appendChild(this._modeBarEl);
 
+        this._protoBarEl = document.createElement('div');
+        this._protoBarEl.className = 'map-proto-bar';
+        this._protoBarEl.setAttribute('role', 'tablist');
+        this._protoBarEl.setAttribute('aria-label', 'Filter map by protocol');
+        this._protoBarEl.innerHTML = `
+            <span class="map-proto-bar__label">Protocol</span>
+            <button type="button" class="topo-proto-toggle__btn topo-proto-toggle__btn--active"
+                data-proto="all" role="tab" aria-selected="true">All</button>
+            <button type="button" class="topo-proto-toggle__btn topo-proto-toggle__btn--mt"
+                data-proto="meshtastic" role="tab" aria-selected="false">MT</button>
+            <button type="button" class="topo-proto-toggle__btn topo-proto-toggle__btn--mc"
+                data-proto="meshcore" role="tab" aria-selected="false">MC</button>
+        `;
+        this._mapWrap.appendChild(this._protoBarEl);
+        this._protoBarEl.querySelectorAll('[data-proto]').forEach((btn) => {
+            btn.addEventListener('click', () => {
+                const val = btn.dataset.proto || 'all';
+                if (this._settings) {
+                    this._settings.set('protocolFilter', val);
+                } else {
+                    this.setProtocolFilter(val);
+                }
+            });
+        });
+        this._syncProtocolToggle();
+
         this._modeBarEl.querySelectorAll('[data-mode]').forEach((btn) => {
             btn.addEventListener('click', () => {
                 const mode = btn.dataset.mode;
@@ -488,7 +549,7 @@ class NodeMap {
             bounds.push([device.latitude, device.longitude]);
         }
 
-        const mapNodes = this._nodesForMapMarkers(nodes);
+        const mapNodes = this._filterByProtocol(this._nodesForMapMarkers(nodes));
         for (const n of mapNodes) {
             const lat = n.latitude;
             const lon = n.longitude;
@@ -936,8 +997,11 @@ class NodeMap {
         const nodeId = _normNodeId(n.node_id || n.id);
         if (!nodeId) return;
 
-        const isMeshtastic = (n.protocol || 'meshtastic') === 'meshtastic';
+        const isMeshtastic = window.TopologyProtocol
+            ? window.TopologyProtocol.resolveNodeProtocol(n) === 'meshtastic'
+            : (n.protocol || 'meshtastic') === 'meshtastic';
         const protoColor = isMeshtastic ? '#06b6d4' : '#a855f7';
+        const protoName = isMeshtastic ? 'Meshtastic' : 'MeshCore';
 
         const heard = n.last_heard || n.last_seen;
         const isRecent = heard && (Date.now() - new Date(heard).getTime()) < 60000;
@@ -980,7 +1044,7 @@ class NodeMap {
 
         marker.bindPopup(
             `<strong>${this._esc(name)}</strong><br>` +
-            `Protocol: ${n.protocol || 'meshtastic'}<br>` +
+            `Protocol: ${protoName}<br>` +
             `RSSI: ${rssi}<br>` +
             `Last heard: ${lastHeard}`,
         );

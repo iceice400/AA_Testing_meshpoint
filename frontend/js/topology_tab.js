@@ -49,6 +49,24 @@ class TopologyTab {
         this._localMeshNodeId = null;
         this._unsubStore = null;
         this._liveRefreshTimer = null;
+        this._settingsUnsub = this._settings.onChange(() => this._onSettingsChange());
+    }
+
+    _onSettingsChange() {
+        if (!this._rendered) return;
+        const pf = this._settings.get('protocolFilter');
+        this._topoMap?.setProtocolFilter(pf);
+        this._roster?.render(this._meshNodes);
+        if (this._viewMode === 'map') this._ensureTopoMap();
+        else this._renderGraph();
+    }
+
+    _filterByProtocol(nodes) {
+        const pf = this._settings?.get('protocolFilter') || 'all';
+        if (window.TopologyProtocol?.filterNodes) {
+            return window.TopologyProtocol.filterNodes(nodes, pf);
+        }
+        return nodes || [];
     }
 
     _detectObserver() {
@@ -471,12 +489,14 @@ class TopologyTab {
                 viewStorageKey: 'meshpoint.topoMap.view',
                 inactMin: this._settings.get('inactMin'),
                 localNodeId: this._localMeshNodeId,
+                settings: this._settings,
             });
         } else {
             this._topoMap.setStore(store);
         }
         this._topoMap.setLocalNodeId(this._localMeshNodeId);
-        this._topoMap.loadNodes(this._meshNodes, this._device);
+        this._topoMap.setProtocolFilter(this._settings.get('protocolFilter') || 'all');
+        this._topoMap.loadNodes(this._filterByProtocol(this._meshNodes), this._device);
         this._topoMap.renderTopology();
         const refit = () => {
             this._topoMap?._map?.invalidateSize();
@@ -534,6 +554,27 @@ class TopologyTab {
         let edges = this._filteredEdges();
         let nodes = (this._graph.nodes || []).map((n) => ({ ...n }));
 
+        const pf = this._settings?.get('protocolFilter') || 'all';
+        if (pf !== 'all' && window.TopologyProtocol?.matchesProtocolFilter) {
+            const meshById = new Map(
+                (this._meshNodes || []).map((n) => [
+                    String(n.node_id || n.id).replace(/^!/, '').toLowerCase(),
+                    n,
+                ]),
+            );
+            nodes = nodes.filter((n) => {
+                const mesh = meshById.get(String(n.id).replace(/^!/, '').toLowerCase());
+                return mesh && window.TopologyProtocol.matchesProtocolFilter(mesh, pf);
+            });
+            edges = edges.filter((e) => {
+                const a = meshById.get(String(e.source).replace(/^!/, '').toLowerCase());
+                const b = meshById.get(String(e.target).replace(/^!/, '').toLowerCase());
+                return a && b
+                    && window.TopologyProtocol.matchesProtocolFilter(a, pf)
+                    && window.TopologyProtocol.matchesProtocolFilter(b, pf);
+            });
+        }
+
         const sel = this._selectedNode?.node_id || this._selectedNode?.id;
         const selNorm = sel ? String(sel).replace(/^!/, '').toLowerCase() : null;
         if (selNorm) {
@@ -567,6 +608,13 @@ class TopologyTab {
         const accentCyan = '#06b6d4';
         const accentGreen = '#00e5a0';
         const accentAmber = '#f59e0b';
+        const accentPurple = '#a855f7';
+        const meshById = new Map(
+            (this._meshNodes || []).map((n) => [
+                String(n.node_id || n.id).replace(/^!/, '').toLowerCase(),
+                n,
+            ]),
+        );
 
         const svg = this._svg.attr('viewBox', `0 0 ${width} ${height}`).attr('width', '100%').attr('height', height);
         svg.selectAll('*').remove();
@@ -580,15 +628,8 @@ class TopologyTab {
             .attr('stroke-width', (d) => (d.snr >= 5 ? 3 : d.snr >= 0 ? 2 : 1.5))
             .attr('stroke-opacity', 0.85);
 
-        const node = g.append('g').selectAll('circle').data(nodes).join('circle')
-            .attr('r', 8)
-            .attr('fill', accentCyan)
-            .attr('stroke', (d) => (
-                String(d.id).replace(/^!/, '').toLowerCase() === selNorm ? accentGreen : '#0f172a'
-            ))
-            .attr('stroke-width', (d) => (
-                String(d.id).replace(/^!/, '').toLowerCase() === selNorm ? 2.5 : 1
-            ))
+        const node = g.append('g').selectAll('g').data(nodes).join('g')
+            .attr('transform', (d) => `translate(${d.x || 0},${d.y || 0})`)
             .style('cursor', 'pointer')
             .on('click', (_, d) => {
                 const dNorm = String(d.id).replace(/^!/, '').toLowerCase();
@@ -598,6 +639,28 @@ class TopologyTab {
                 if (mesh) this._selectNode(mesh);
             });
 
+        node.each(function (d) {
+            const el = d3.select(this);
+            const dNorm = String(d.id).replace(/^!/, '').toLowerCase();
+            const mesh = meshById.get(dNorm);
+            const isMc = mesh && window.TopologyProtocol?.resolveNodeProtocol(mesh) === 'meshcore';
+            const fill = isMc ? accentPurple : accentCyan;
+            const sel = dNorm === selNorm;
+            if (isMc) {
+                el.append('polygon')
+                    .attr('points', '0,-9 9,0 0,9 -9,0')
+                    .attr('fill', fill)
+                    .attr('stroke', sel ? accentGreen : '#0f172a')
+                    .attr('stroke-width', sel ? 2.5 : 1);
+            } else {
+                el.append('circle')
+                    .attr('r', 8)
+                    .attr('fill', fill)
+                    .attr('stroke', sel ? accentGreen : '#0f172a')
+                    .attr('stroke-width', sel ? 2.5 : 1);
+            }
+        });
+
         if (this._simulation) this._simulation.stop();
         this._simulation = d3.forceSimulation(nodes)
             .force('link', d3.forceLink(edges).id((d) => d.id).distance(85))
@@ -606,7 +669,7 @@ class TopologyTab {
             .on('tick', () => {
                 link.attr('x1', (d) => d.source.x).attr('y1', (d) => d.source.y)
                     .attr('x2', (d) => d.target.x).attr('y2', (d) => d.target.y);
-                node.attr('cx', (d) => d.x).attr('cy', (d) => d.y);
+                node.attr('transform', (d) => `translate(${d.x},${d.y})`);
             });
     }
 
