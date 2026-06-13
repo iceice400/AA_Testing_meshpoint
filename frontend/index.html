@@ -37,6 +37,7 @@
     <link rel="stylesheet" href="css/stats.css" />
     <link rel="stylesheet" href="css/topology.css" />
     <link rel="stylesheet" href="css/status_strip.css" />
+    <link rel="stylesheet" href="css/map_topology.css" />
     <link rel="stylesheet" href="css/rf.css" />
     <link rel="stylesheet" href="css/unknown_rf.css" />
     <link rel="stylesheet" href="css/settings.css" />
@@ -365,12 +366,21 @@
 
                     <div class="dashboard__main">
                         <section class="dashboard__map">
-                            <div class="panel">
+                            <div class="panel panel--map-topology">
                                 <div class="panel__header panel__header--map">
-                                    <span>Node Map</span>
-                                    <span id="map-unplotted" class="map-unplotted" hidden></span>
+                                    <span>Smart Map</span>
+                                    <div class="map-header__actions">
+                                        <span id="map-unplotted" class="map-unplotted" hidden></span>
+                                        <button type="button" id="map-dock-open" class="map-dock-open-btn" title="Topology panel">Topology</button>
+                                    </div>
                                 </div>
-                                <div id="map" class="panel__body map-container"></div>
+                                <div class="panel__body map-panel__layout">
+                                    <aside id="map-topology-dock" class="map-topology-dock"></aside>
+                                    <div class="map-panel__map-wrap">
+                                        <div id="map" class="map-container"></div>
+                                    </div>
+                                </div>
+                                <div id="map-topology-status-host" class="map-topology-status-host"></div>
                             </div>
                         </section>
 
@@ -767,6 +777,9 @@
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
     <script src="js/websocket_client.js"></script>
+    <script src="js/status_strip.js"></script>
+    <script src="js/topology/topology_store.js"></script>
+    <script src="js/map_topology_dock.js"></script>
     <script src="js/components/node_map.js"></script>
     <script src="js/meshpoint_display_units.js"></script>
     <script src="js/meshpoint_node_favorites.js"></script>

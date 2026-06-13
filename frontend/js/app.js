@@ -128,7 +128,30 @@ document.addEventListener('DOMContentLoaded', async () => {
     _bootConfigurationPanel(router);
     _bootDangerousPanel(router);
 
-    const nodeMap = new NodeMap('map');
+    const topologyStore = new TopologyStore({ hours: 24 });
+    window.topologyStore = topologyStore;
+    const knownNodeIds = new Set();
+
+    const mapDock = new MapTopologyDock('map-topology-dock', topologyStore, {
+        onOpenLogical: () => router.navigate('topology'),
+        onSelectDark: (node) => {
+            router.navigate('topology');
+            setTimeout(() => {
+                if (window.topologyTab) {
+                    window.topologyTab._selectedNode = node.id;
+                    window.topologyTab.refresh();
+                }
+            }, 150);
+        },
+    });
+    window.mapTopologyDock = mapDock;
+
+    document.getElementById('map-dock-open')?.addEventListener('click', () => {
+        const dock = document.getElementById('map-topology-dock');
+        if (dock) dock.classList.remove('map-topology-dock--collapsed');
+    });
+
+    const nodeMap = new NodeMap('map', { store: topologyStore });
     const packetFeed = new SimplePacketFeed('packet-tbody');
 
     const nodeDrawer = new NodeDrawer('node-drawer', {
@@ -166,11 +189,36 @@ document.addEventListener('DOMContentLoaded', async () => {
         else nodeMap.clearFocusLine();
     });
 
-    await _loadInitial(nodeMap, nodeCards, packetFeed);
+    await _loadInitial(nodeMap, nodeCards, packetFeed, topologyStore, mapDock, knownNodeIds);
     await _updateStats();
     _checkForUpdate();
 
     window.concentratorWS.on('packet', (packet) => {
+        if (packet.source_id && !knownNodeIds.has(packet.source_id)) {
+            knownNodeIds.add(packet.source_id);
+            mapDock.pushAlert({
+                type: 'new',
+                node_id: packet.source_id,
+                node_name: packet.source_id,
+                message: 'New node first seen on mesh.',
+            });
+        }
+
+        topologyStore.ingestPacket(packet);
+
+        if (packet.packet_type === 'telemetry') {
+            const batt = packet.decoded_payload?.battery_level
+                ?? packet.decoded_payload?.device_metrics?.batteryLevel;
+            if (batt != null && batt <= 10) {
+                mapDock.pushAlert({
+                    type: 'warn',
+                    node_id: packet.source_id,
+                    node_name: packet.source_id,
+                    message: `Battery critical: ${batt}%`,
+                });
+            }
+        }
+
         packetFeed.addPacket(packet);
         nodeMap.updateFromPacket(packet);
         nodeCards.updateFromPacket(packet);
@@ -178,6 +226,12 @@ document.addEventListener('DOMContentLoaded', async () => {
     });
 
     window.concentratorWS.on('alert', (data) => {
+        mapDock.pushAlert({
+            type: data?.alert_kind || 'info',
+            node_id: data?.node_id,
+            node_name: data?.node_id,
+            message: data?.detail || data?.message || data?.alert_kind || 'Alert',
+        });
         if (window.pushNotifications) {
             window.pushNotifications.handleAlert(data);
         }
@@ -189,7 +243,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     window.concentratorWS.connect();
 
     setInterval(() => {
-        _refreshData(nodeMap, nodeCards, packetFeed);
+        _refreshData(nodeMap, nodeCards, packetFeed, topologyStore);
         _updateStats();
     }, 15_000);
 
@@ -310,7 +364,7 @@ function _openMessagingForNode(node) {
     }, 100);
 }
 
-async function _loadInitial(nodeMap, nodeList, packetFeed) {
+async function _loadInitial(nodeMap, nodeList, packetFeed, topologyStore, mapDock, knownNodeIds) {
     try {
         const [deviceRes, nodesRes, packetsRes] = await Promise.all([
             fetch('/api/device'),
@@ -324,9 +378,17 @@ async function _loadInitial(nodeMap, nodeList, packetFeed) {
         _setText('sidebar-device-name', _resolveDeviceLabel(device));
 
         const nodes = nodesData.nodes || nodesData || [];
+        for (const n of nodes) {
+            if (n.node_id) knownNodeIds.add(n.node_id);
+        }
+        if (topologyStore) {
+            topologyStore.syncMeshNodes(nodes);
+            await topologyStore.refreshFromApi();
+        }
         nodeMap.loadNodes(nodes, device);
         nodeList.loadNodes(nodes);
         packetFeed.loadNodes(nodes);
+        mapDock?.renderStats();
 
         const packets = packetsData.packets || packetsData || [];
         const sorted = packets.sort((a, b) => {
@@ -341,7 +403,7 @@ async function _loadInitial(nodeMap, nodeList, packetFeed) {
     }
 }
 
-async function _refreshData(nodeMap, nodeList, packetFeed) {
+async function _refreshData(nodeMap, nodeList, packetFeed, topologyStore) {
     try {
         const [nodesRes, deviceRes] = await Promise.all([
             fetch('/api/nodes?enrich=true'),
@@ -350,6 +412,10 @@ async function _refreshData(nodeMap, nodeList, packetFeed) {
         const data = await nodesRes.json();
         const nodes = data.nodes || data || [];
         const device = deviceRes.ok ? await deviceRes.json() : undefined;
+        if (topologyStore) {
+            topologyStore.syncMeshNodes(nodes);
+            await topologyStore.refreshFromApi();
+        }
         nodeMap.loadNodes(nodes, device);
         nodeList.loadNodes(nodes);
         packetFeed.loadNodes(nodes);

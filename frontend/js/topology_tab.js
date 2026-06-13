@@ -21,6 +21,10 @@ class TopologyTab {
             if (!res.ok) return;
             this._graph = await res.json();
             this._fetchedAt = Date.now();
+            if (window.topologyStore) {
+                window.topologyStore.setHours(this._hours);
+                window.topologyStore.loadFromApi(this._graph);
+            }
             if (!this._rendered) {
                 this._buildLayout();
                 this._rendered = true;
