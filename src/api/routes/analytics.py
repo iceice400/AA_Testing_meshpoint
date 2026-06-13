@@ -11,6 +11,7 @@ from src.api.auth.jwt_session import SessionClaims
 
 from src.relay.node_id import is_valid_meshtastic_node_id, normalize_node_id
 from src.analytics.dark_node_locator import compute_topo_centroid_estimates
+from src.analytics.trace_path import build_trace_path, trace_path_edges
 from src.analytics.signal_analyzer import SignalAnalyzer
 from src.analytics.topology_poller import TopologyPoller
 from src.analytics.traffic_monitor import TrafficMonitor
@@ -104,6 +105,48 @@ def _norm_nid(nid: str) -> str:
 
 def _is_weak(rssi: float | None) -> bool:
     return rssi is not None and rssi < -110
+
+
+def _add_trace_edges(
+    edges: dict[str, dict],
+    edge_sources: set[str],
+    *,
+    source: str,
+    destination: str | None,
+    route: list | None,
+    edge_type: str,
+    rssi: float | None,
+    snr: float | None,
+    timestamp: str,
+    routes: list[dict] | None = None,
+    route_meta: dict | None = None,
+) -> None:
+    path = build_trace_path(source, destination, route if isinstance(route, list) else [])
+    path_edges = trace_path_edges(path)
+    if not path_edges:
+        return
+    if routes is not None and len(path) >= 2:
+        entry = {
+            "source_id": source,
+            "route": path,
+            "last_seen": timestamp,
+        }
+        if route_meta:
+            entry.update(route_meta)
+        routes.append(entry)
+    for left, right in path_edges:
+        key = _edge_key(left, right)
+        if key not in edges:
+            edge_sources.add(edge_type)
+            edges[key] = {
+                "source": left,
+                "target": right,
+                "edge_type": edge_type,
+                "rssi": rssi,
+                "snr": snr,
+                "weak": _is_weak(rssi),
+                "last_seen": timestamp,
+            }
 
 
 async def _apply_node_metadata(nodes: dict[str, dict]) -> tuple[list[str], list[dict]]:
@@ -334,66 +377,45 @@ async def network_topology(hours: int = Query(24, ge=1, le=168)):
 
         if packet_type == "traceroute":
             stats["traceroute_packets"] += 1
-            route = payload.get("route") or []
-            if not isinstance(route, list) or len(route) < 2:
-                continue
-            route_ids = [_norm_nid(str(node_id)) for node_id in route]
-            route_ids = [rid for rid in route_ids if rid]
-            if len(route_ids) < 2:
-                continue
-            routes.append({
-                "source_id": source,
-                "route": route_ids,
-                "snr_towards": payload.get("snr_towards") or [],
-                "snr_back": payload.get("snr_back") or [],
-                "last_seen": row["timestamp"],
-            })
-            for idx in range(len(route_ids) - 1):
-                a, b = route_ids[idx], route_ids[idx + 1]
-                key = _edge_key(a, b)
-                if key not in edges:
-                    edge_sources.add("traceroute")
-                    edges[key] = {
-                        "source": a,
-                        "target": b,
-                        "edge_type": "traceroute",
-                        "rssi": rssi,
-                        "snr": snr,
-                        "weak": _is_weak(rssi),
-                        "last_seen": row["timestamp"],
-                    }
+            dest = _norm_nid(row.get("destination_id") or "")
+            _add_trace_edges(
+                edges,
+                edge_sources,
+                source=source,
+                destination=dest,
+                route=payload.get("route"),
+                edge_type="traceroute",
+                rssi=rssi,
+                snr=snr,
+                timestamp=row["timestamp"],
+                routes=routes,
+                route_meta={
+                    "snr_towards": payload.get("snr_towards") or [],
+                    "snr_back": payload.get("snr_back") or [],
+                },
+            )
             continue
 
         if packet_type == "routing":
             stats["routing_packets"] += 1
-            for field in ("route_reply", "route_request"):
+            dest = _norm_nid(row.get("destination_id") or "")
+            for field in ("route_reply", "route_request", "route"):
                 route = payload.get(field)
-                if not isinstance(route, list) or len(route) < 2:
+                if not isinstance(route, list):
                     continue
-                route_ids = [_norm_nid(str(node_id)) for node_id in route]
-                route_ids = [rid for rid in route_ids if rid]
-                if len(route_ids) < 2:
-                    continue
-                routes.append({
-                    "source_id": source,
-                    "route": route_ids,
-                    "last_seen": row["timestamp"],
-                    "kind": field,
-                })
-                for idx in range(len(route_ids) - 1):
-                    a, b = route_ids[idx], route_ids[idx + 1]
-                    key = _edge_key(a, b)
-                    if key not in edges:
-                        edge_sources.add("routing")
-                        edges[key] = {
-                            "source": a,
-                            "target": b,
-                            "edge_type": "routing",
-                            "rssi": rssi,
-                            "snr": snr,
-                            "weak": _is_weak(rssi),
-                        "last_seen": row["timestamp"],
-                    }
+                _add_trace_edges(
+                    edges,
+                    edge_sources,
+                    source=source,
+                    destination=dest,
+                    route=route,
+                    edge_type="routing",
+                    rssi=rssi,
+                    snr=snr,
+                    timestamp=row["timestamp"],
+                    routes=routes,
+                    route_meta={"kind": field},
+                )
 
     unplotted_ids, node_list = await _apply_node_metadata(nodes)
     edge_list = list(edges.values())

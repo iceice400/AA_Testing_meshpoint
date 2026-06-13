@@ -223,7 +223,7 @@ class PacketRepository:
         """Recent topology-bearing packets within a time window."""
         rows = await self._db.fetch_all(
             """
-            SELECT source_id, packet_type, protocol, decoded_payload,
+            SELECT source_id, destination_id, packet_type, protocol, decoded_payload,
                    rssi, snr, timestamp
             FROM packets
             WHERE timestamp >= ?

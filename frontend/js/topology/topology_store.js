@@ -308,14 +308,11 @@
                 return true;
             }
 
-            const routeFields = type === 'traceroute'
-                ? [payload.route]
-                : [payload.route_reply, payload.route_request, payload.route];
+            const traceRoutes = window.TopologyTrace?.extractTraceRoutes?.(packet) || [];
             let addedRoute = false;
-            for (const route of routeFields) {
-                if (!Array.isArray(route) || route.length < 2) continue;
-                const routeIds = route.map((hop) => normalizeNodeId(hop)).filter(Boolean);
-                if (routeIds.length < 2) continue;
+            for (const trace of traceRoutes) {
+                const routeIds = trace.route;
+                if (!Array.isArray(routeIds) || routeIds.length < 2) continue;
                 for (let i = 0; i < routeIds.length - 1; i++) {
                     this._upsertEdge(routeIds[i], routeIds[i + 1], {
                         rssi,
@@ -327,12 +324,12 @@
                         ts,
                     });
                 }
-                if (!addedRoute && routeIds.length >= 2) {
+                if (!addedRoute) {
                     this._routes.unshift({
                         source_id: sourceId,
                         route: routeIds,
-                        snr_towards: payload.snr_towards || [],
-                        snr_back: payload.snr_back || [],
+                        snr_towards: trace.snr_towards || [],
+                        snr_back: trace.snr_back || [],
                         ts,
                         last_seen: packet.timestamp || new Date(ts).toISOString(),
                     });

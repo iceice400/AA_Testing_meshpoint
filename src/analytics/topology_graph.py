@@ -6,6 +6,7 @@ import time
 from collections import defaultdict
 from typing import TYPE_CHECKING
 
+from src.analytics.trace_path import build_trace_path, trace_path_edges
 from src.models.packet import PacketType
 from src.relay.node_id import normalize_node_id
 
@@ -78,20 +79,32 @@ class TopologyGraph:
             return
 
         if packet.packet_type == PacketType.TRACEROUTE:
-            self._ingest_route(payload.get("route"))
+            self._ingest_trace_path(
+                packet.source_id,
+                packet.destination_id,
+                payload.get("route"),
+            )
             return
 
         if packet.packet_type == PacketType.ROUTING:
-            for field in ("route_reply", "route_request"):
-                self._ingest_route(payload.get(field))
+            for field in ("route_reply", "route_request", "route"):
+                self._ingest_trace_path(
+                    packet.source_id,
+                    packet.destination_id,
+                    payload.get(field),
+                )
 
-    def _ingest_route(self, route: object) -> None:
-        if not isinstance(route, list) or len(route) < 2:
-            return
-        ids = [normalize_node_id(str(node_id)) for node_id in route]
-        ids = [node_id for node_id in ids if node_id]
-        for idx in range(len(ids) - 1):
-            self.add_edge(ids[idx], ids[idx + 1])
+    def _ingest_trace_path(
+        self,
+        source: str | None,
+        destination: str | None,
+        route: object,
+    ) -> None:
+        if not isinstance(route, list):
+            route = []
+        path = build_trace_path(source, destination, route)
+        for left, right in trace_path_edges(path):
+            self.add_edge(left, right)
 
     def active_neighbors(
         self,

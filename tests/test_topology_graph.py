@@ -44,6 +44,20 @@ class TestTopologyGraph(unittest.TestCase):
         self.assertIn("11223344", graph.active_neighbors("aabbccdd"))
         self.assertIn("deadbeef", graph.active_neighbors("11223344"))
 
+    def test_empty_traceroute_probe_builds_direct_edge(self) -> None:
+        graph = TopologyGraph()
+        packet = Packet(
+            packet_id="03",
+            source_id="f6acb04f",
+            destination_id="49b7a980",
+            protocol=Protocol.MESHTASTIC,
+            packet_type=PacketType.TRACEROUTE,
+            decoded_payload={"route": [], "snr_towards": []},
+        )
+        graph.observe_packet(packet)
+        self.assertIn("49b7a980", graph.active_neighbors("f6acb04f"))
+        self.assertEqual(graph.snapshot_stats()["edge_count"], 1)
+
     def test_redundancy_ratio_requires_neighbors(self) -> None:
         graph = TopologyGraph()
         now = time.monotonic()
