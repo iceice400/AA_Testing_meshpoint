@@ -132,6 +132,10 @@ class NodeMap {
         this._map.on('moveend', () => this._saveCurrentView());
         this._map.on('zoomend', () => this._saveCurrentView());
 
+        if (this._topologyEnabled) {
+            this._map.zoomControl.setPosition('bottomright');
+        }
+
         if (window.MeshpointNodeFavorites) {
             window.MeshpointNodeFavorites.onChange(() => {
                 if (this._lastNodes) {
@@ -413,14 +417,19 @@ class NodeMap {
         this._badgesEl = document.createElement('div');
         this._badgesEl.className = 'map-status-badges';
         this._badgesEl.innerHTML = `
-            <span class="map-status-badge">Nodes <strong id="map-badge-nodes">0</strong></span>
-            <span class="map-status-badge">Links <strong id="map-badge-links">0</strong></span>
-            <span class="map-status-badge">Dark <strong id="map-badge-dark">0</strong></span>
-            <span class="map-status-badge map-status-badge--warn" id="map-badge-warn" hidden>
-                ⚠ <strong id="map-badge-warn-txt"></strong>
+            <span class="map-status-badge">Nodes <strong class="map-badge-nodes">0</strong></span>
+            <span class="map-status-badge">Links <strong class="map-badge-links">0</strong></span>
+            <span class="map-status-badge">Dark <strong class="map-badge-dark">0</strong></span>
+            <span class="map-status-badge map-status-badge--warn map-badge-warn" hidden>
+                ⚠ <strong class="map-badge-warn-txt"></strong>
             </span>
         `;
         this._mapWrap.appendChild(this._badgesEl);
+        this._badgeNodesEl = this._badgesEl.querySelector('.map-badge-nodes');
+        this._badgeLinksEl = this._badgesEl.querySelector('.map-badge-links');
+        this._badgeDarkEl = this._badgesEl.querySelector('.map-badge-dark');
+        this._badgeWarnEl = this._badgesEl.querySelector('.map-badge-warn');
+        this._badgeWarnTxtEl = this._badgesEl.querySelector('.map-badge-warn-txt');
 
         this._modeBarEl = document.createElement('div');
         this._modeBarEl.className = 'map-mode-bar';
@@ -475,6 +484,7 @@ class NodeMap {
                     }
                     this._store.notifyChange();
                 }
+                this.renderTopology();
             });
         });
 
@@ -583,6 +593,7 @@ class NodeMap {
         const showDark = this._store.layers.darkStubs !== false;
         const showLabels = this._store.layers.labels !== false;
         const mode = this._store.mapMode || 'topology';
+        const hopMode = mode === 'hop';
 
         if (this._store.layers.coverage) {
             this._setCoverageVisible(true);
@@ -594,10 +605,14 @@ class NodeMap {
             snap.edges || [],
         );
         this._renderDarkStubs(stubPool, snap.estimates || [], showDark);
-        this._renderEdges(snap.edges, showEdges, mode);
-        this._renderRoutePaths(snap.routes, showEdges && mode !== 'coverage');
+        const drawnLinks = this._renderEdges(snap.edges, showEdges, mode);
+        this._renderRoutePaths(
+            snap.routes,
+            showEdges && mode !== 'coverage',
+            hopMode,
+        );
         this._updateLabels(showLabels);
-        this._updateBadges(snap);
+        this._updateBadges(snap, drawnLinks);
         this._updateStatusStrip(snap);
     }
 
@@ -606,13 +621,21 @@ class NodeMap {
             this._topologyLayer.clearLayers();
             this._edgeLines.clear();
             this._updateTopologyHint(edges.length, 0);
-            return;
+            return 0;
+        }
+
+        let edgePool = edges || [];
+        if (mode === 'hop') {
+            edgePool = edgePool.filter((edge) => {
+                const kind = edge.edge_type || edge.source_kind || '';
+                return kind === 'traceroute' || kind === 'routing';
+            });
         }
 
         const activeKeys = new Set();
         let drawn = 0;
 
-        for (const edge of edges) {
+        for (const edge of edgePool) {
             const srcLl = this._resolveLatLng(edge.nodeA);
             const tgtLl = this._resolveLatLng(edge.nodeB);
             if (!srcLl || !tgtLl) continue;
@@ -621,19 +644,22 @@ class NodeMap {
             activeKeys.add(edge.key);
 
             const color = this._resolveEdgeColor(edge, mode);
-            const weight = this._store.edgeWeight(edge);
+            const weight = mode === 'signal'
+                ? Math.max(2.5, this._store.edgeWeight(edge) + 1)
+                : (mode === 'hop' ? Math.max(3, this._store.edgeWeight(edge)) : this._store.edgeWeight(edge));
             const dash = this._store.edgeDash(edge);
+            const opacity = mode === 'signal' ? 0.95 : 0.85;
             const latlngs = [srcLl, tgtLl];
 
             if (this._edgeLines.has(edge.key)) {
                 const line = this._edgeLines.get(edge.key);
                 line.setLatLngs(latlngs);
-                line.setStyle({ color, weight, dashArray: dash, opacity: 0.85 });
+                line.setStyle({ color, weight, dashArray: dash, opacity });
             } else {
                 const line = L.polyline(latlngs, {
                     color,
                     weight,
-                    opacity: 0.85,
+                    opacity,
                     dashArray: dash,
                     lineCap: 'round',
                 });
@@ -654,9 +680,10 @@ class NodeMap {
         }
 
         this._updateTopologyHint(edges.length, drawn);
+        return drawn;
     }
 
-    _renderRoutePaths(routes, showRoutes) {
+    _renderRoutePaths(routes, showRoutes, hopEmphasis = false) {
         this._routeLayer.clearLayers();
         this._routeLines = [];
         for (const lines of this._hopSegmentLines.values()) {
@@ -692,8 +719,8 @@ class NodeMap {
                 const color = this._snrHopColor(snr);
                 const line = L.polyline([a, b], {
                     color,
-                    weight: 4,
-                    opacity: 0.9,
+                    weight: hopEmphasis ? 5 : 4,
+                    opacity: hopEmphasis ? 1 : 0.9,
                     lineCap: 'round',
                     className: isRecent ? 'topo-hop-live' : '',
                 });
@@ -912,15 +939,12 @@ class NodeMap {
         }
     }
 
-    _updateBadges(snap) {
-        const nodesEl = document.getElementById('map-badge-nodes');
-        const linksEl = document.getElementById('map-badge-links');
-        const darkEl = document.getElementById('map-badge-dark');
-        const warnWrap = document.getElementById('map-badge-warn');
-        const warnTxt = document.getElementById('map-badge-warn-txt');
-        if (nodesEl) nodesEl.textContent = String(snap.mapped ?? snap.nodes?.length ?? 0);
-        if (linksEl) linksEl.textContent = String(snap.edges.length);
-        if (darkEl) darkEl.textContent = String(snap.dark);
+    _updateBadges(snap, drawnLinks = 0) {
+        const plotted = Object.keys(this._markers || {}).length;
+        const linkCount = drawnLinks || snap.edges?.length || 0;
+        if (this._badgeNodesEl) this._badgeNodesEl.textContent = String(plotted);
+        if (this._badgeLinksEl) this._badgeLinksEl.textContent = String(linkCount);
+        if (this._badgeDarkEl) this._badgeDarkEl.textContent = String(snap.dark ?? 0);
 
         const unplottedEl = document.getElementById('map-unplotted');
         if (unplottedEl) {
@@ -935,12 +959,12 @@ class NodeMap {
             }
         }
 
-        if (warnWrap && warnTxt) {
+        if (this._badgeWarnEl && this._badgeWarnTxtEl) {
             if (snap.poor_edges > 0) {
-                warnWrap.hidden = false;
-                warnTxt.textContent = `${snap.poor_edges} poor link${snap.poor_edges > 1 ? 's' : ''}`;
+                this._badgeWarnEl.hidden = false;
+                this._badgeWarnTxtEl.textContent = `${snap.poor_edges} poor link${snap.poor_edges > 1 ? 's' : ''}`;
             } else {
-                warnWrap.hidden = true;
+                this._badgeWarnEl.hidden = true;
             }
         }
     }

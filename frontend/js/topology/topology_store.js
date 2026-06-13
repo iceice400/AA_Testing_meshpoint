@@ -85,7 +85,10 @@
         }
 
         setHours(hours) {
-            this.hours = hours;
+            const h = Number(hours);
+            this.hours = Number.isFinite(h) && h > 0 ? h : 24;
+            this._pruneStaleEdges();
+            this._emit();
         }
 
         setSelectedNode(nodeId) {
@@ -169,6 +172,7 @@
         loadFromApi(data) {
             if (!data || typeof data !== 'object') return;
             this._fetchedAt = Date.now();
+            this._edges.clear();
             this._routes = Array.isArray(data.routes)
                 ? data.routes.map((r) => ({
                     ...r,
@@ -351,7 +355,8 @@
         }
 
         _pruneStaleEdges() {
-            const cutoff = Date.now() - this.staleEdgeMs;
+            const windowMs = Math.max(this.hours || 24, 1) * 60 * 60 * 1000;
+            const cutoff = Date.now() - windowMs;
             for (const [key, edge] of this._edges) {
                 if ((edge.ts || 0) < cutoff) {
                     this._edges.delete(key);
@@ -367,6 +372,10 @@
                 : null;
 
             return [...this._edges.values()].filter((edge) => {
+                if (this.mapMode === 'hop' && !routeKeys) {
+                    const kind = edge.edge_type || edge.source_kind || '';
+                    if (kind !== 'traceroute' && kind !== 'routing') return false;
+                }
                 if (edge.rssi != null && edge.rssi < f.minRssi) return false;
                 if (edge.snr != null && edge.snr < f.minSnr) return false;
                 if ((edge.hops || 1) > f.maxHops) return false;
@@ -389,7 +398,8 @@
 
         getUnplotted() {
             const out = [];
-            for (const id of this._knownNodeIds) {
+            const ids = new Set([...this._knownNodeIds, ...this._meshNodes.keys()]);
+            for (const id of ids) {
                 const mesh = this._meshNodes.get(id);
                 const node = this._nodes.get(id) || {};
                 const lat = mesh?.latitude ?? node.lat ?? node.latitude;
@@ -413,12 +423,7 @@
         getSnapshot() {
             const edges = this.getFilteredEdges();
             const nodes = [...this._nodes.values()];
-            const mapped = nodes.filter((n) => {
-                const mesh = this._meshNodes.get(n.id);
-                const lat = mesh?.latitude ?? n.lat ?? n.latitude;
-                const lng = mesh?.longitude ?? n.lng ?? n.longitude;
-                return _coordsValid(lat, lng);
-            }).length;
+            const mapped = this.getPlottedMeshNodes().length;
             const unplotted = this.getUnplotted();
             const poorEdges = edges.filter((e) => (e.rssi ?? 0) < RSSI_MED).length;
 

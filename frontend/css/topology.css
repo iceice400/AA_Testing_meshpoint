@@ -531,10 +531,21 @@
 .topo-map-panel .map-status-badges {
     top: 0.55rem;
     left: 0.55rem;
+    max-width: calc(100% - 11rem);
+}
+
+.topo-map-panel .map-proto-bar {
+    top: 0.55rem;
+    right: 0.55rem;
 }
 
 .topo-map-panel .map-mode-bar {
-    bottom: 0.65rem;
+    bottom: calc(var(--topo-util-h, 38px) + 0.85rem);
+}
+
+.topo-map-panel .leaflet-bottom.leaflet-right {
+    bottom: calc(var(--topo-util-h, 38px) + 0.35rem);
+    right: 0.55rem;
 }
 
 /* ── Right intel panel ─────────────────────────────────────────── */

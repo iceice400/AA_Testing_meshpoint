@@ -82,6 +82,7 @@ class TopologyTab {
         if (this._poller) this._poller._store = store;
         if (this._roster) this._roster._store = store;
         if (this._intel) this._intel._store = store;
+        if (this._intel) this._intel._syncStoreLayers?.();
         if (this._topoMap) {
             this._topoMap.setStore(store);
         }
