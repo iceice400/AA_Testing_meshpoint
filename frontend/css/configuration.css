@@ -477,3 +477,94 @@ select.cfg-field__input option:checked {
 .cfg-mc-channels {
     margin-bottom: 14px;
 }
+
+/* Quick Deploy — Meshtastic channel QR share */
+.cfg-quick-deploy {
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
+
+.cfg-quick-deploy__steps {
+    margin: 0;
+    padding-left: 1.25rem;
+    font-size: 13px;
+    color: rgba(243, 244, 246, 0.75);
+    line-height: 1.55;
+}
+
+.cfg-quick-deploy__steps li + li {
+    margin-top: 4px;
+}
+
+.cfg-quick-deploy__qr {
+    display: flex;
+    justify-content: center;
+}
+
+.cfg-quick-deploy__qr-frame {
+    background: #fff;
+    border-radius: 12px;
+    padding: 12px;
+    box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.12);
+}
+
+.cfg-quick-deploy__qr-frame canvas {
+    display: block;
+    width: 240px;
+    height: 240px;
+}
+
+.cfg-quick-deploy__placeholder {
+    margin: 0;
+    font-size: 13px;
+    color: rgba(243, 244, 246, 0.65);
+    text-align: center;
+}
+
+.cfg-quick-deploy__meta {
+    display: grid;
+    gap: 6px;
+    background: rgba(0, 0, 0, 0.2);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 10px;
+    padding: 10px 12px;
+}
+
+.cfg-quick-deploy__row {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    font-size: 13px;
+}
+
+.cfg-quick-deploy__key {
+    color: rgba(243, 244, 246, 0.55);
+}
+
+.cfg-quick-deploy__val {
+    font-family: 'JetBrains Mono', Menlo, monospace;
+    color: #f3f4f6;
+    text-align: right;
+}
+
+.cfg-quick-deploy__url-details {
+    font-size: 12px;
+    color: rgba(243, 244, 246, 0.65);
+}
+
+.cfg-quick-deploy__url-details summary {
+    cursor: pointer;
+    color: var(--accent-cyan, #22d3ee);
+    user-select: none;
+}
+
+.cfg-quick-deploy__url {
+    margin: 8px 0 0;
+    word-break: break-all;
+    font-family: 'JetBrains Mono', Menlo, monospace;
+    font-size: 11px;
+    line-height: 1.45;
+    color: rgba(243, 244, 246, 0.8);
+}
+
