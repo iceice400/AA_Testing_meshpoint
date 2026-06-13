@@ -45,6 +45,7 @@ def enrich_config_payload(cfg: AppConfig, base: dict) -> dict:
         },
     }
     sg = relay.storm_guard
+    rt = relay.topology
     base["relay"] = {
         "enabled": relay.enabled,
         "serial_port": relay.serial_port,
@@ -64,6 +65,15 @@ def enrich_config_payload(cfg: AppConfig, base: dict) -> dict:
             "rate_threshold_per_minute": sg.rate_threshold_per_minute,
             "quarantine_duration_seconds": sg.quarantine_duration_seconds,
             "notify_dashboard": sg.notify_dashboard,
+        },
+        "topology": {
+            "enabled": rt.enabled,
+            "listen_window_ms": rt.listen_window_ms,
+            "listen_window_max_ms": rt.listen_window_max_ms,
+            "suppression_enabled": rt.suppression_enabled,
+            "suppression_min_neighbors": rt.suppression_min_neighbors,
+            "suppression_overlap_percent": rt.suppression_overlap_percent,
+            "graph_max_age_seconds": rt.graph_max_age_seconds,
         },
     }
     base["radio_advanced"] = {

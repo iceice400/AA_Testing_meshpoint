@@ -7,6 +7,7 @@ import logging
 from typing import Any, Callable, Optional
 
 from src.analytics.stats_reporter import StatsReporter
+from src.analytics.topology_graph import TopologyGraph
 from src.capture.capture_coordinator import CaptureCoordinator
 from src.config import AppConfig
 from src.decode.crypto_service import CryptoService
@@ -44,12 +45,16 @@ class PipelineCoordinator:
         self._router = PacketRouter(self._crypto)
         self._capture = CaptureCoordinator()
         radio = config.radio
+        self._topology_graph = TopologyGraph(
+            max_edge_age_seconds=float(config.relay.topology.graph_max_age_seconds),
+        )
         self._relay = build_relay_manager(
             config.relay,
             region=radio.region,
             default_sf=radio.spreading_factor,
             default_bw_khz=radio.bandwidth_khz,
             default_preamble=radio.preamble_length,
+            topology_graph=self._topology_graph,
         )
         self._transmitter: Optional[MeshtasticTransmitter] = None
         self._mqtt: Optional[MqttPublisher] = None
@@ -109,6 +114,10 @@ class PipelineCoordinator:
     @property
     def relay_manager(self) -> RelayManager:
         return self._relay
+
+    @property
+    def topology_graph(self) -> TopologyGraph:
+        return self._topology_graph
 
     @property
     def stats_reporter(self) -> StatsReporter:
@@ -293,6 +302,7 @@ class PipelineCoordinator:
         packet.capture_source = raw.capture_source
         await self._store_packet(packet)
         self._notify_callbacks(packet)
+        self._topology_graph.observe_packet(packet)
         await self._relay.process_packet(packet)
         self._publish_mqtt(packet)
         self._record_stats(packet)

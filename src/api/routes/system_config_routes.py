@@ -61,6 +61,16 @@ class StormGuardUpdate(BaseModel):
     notify_dashboard: Optional[bool] = None
 
 
+class TopologyRelayUpdate(BaseModel):
+    enabled: Optional[bool] = None
+    listen_window_ms: Optional[int] = Field(None, ge=0, le=5000)
+    listen_window_max_ms: Optional[int] = Field(None, ge=0, le=10000)
+    suppression_enabled: Optional[bool] = None
+    suppression_min_neighbors: Optional[int] = Field(None, ge=1, le=20)
+    suppression_overlap_percent: Optional[float] = Field(None, ge=10, le=100)
+    graph_max_age_seconds: Optional[int] = Field(None, ge=300, le=86400)
+
+
 class RelayUpdate(BaseModel):
     enabled: Optional[bool] = None
     serial_port: Optional[str] = None
@@ -74,6 +84,7 @@ class RelayUpdate(BaseModel):
     dedup_ttl_seconds: Optional[int] = Field(None, ge=5, le=3600)
     channel_throttle_percent: Optional[dict[str, float]] = None
     storm_guard: Optional[StormGuardUpdate] = None
+    topology: Optional[TopologyRelayUpdate] = None
 
 
 class RadioAdvancedUpdate(BaseModel):
@@ -295,6 +306,55 @@ async def update_relay(
                 "notify_dashboard": sg.notify_dashboard,
             }
 
+    topology_hot_reload = False
+    if req.topology is not None:
+        topo = relay.topology
+        topo_updates: dict = {}
+        topo_req = req.topology
+        if topo_req.enabled is not None:
+            topo.enabled = topo_req.enabled
+            topo_updates["enabled"] = topo.enabled
+            topology_hot_reload = True
+        if topo_req.listen_window_ms is not None:
+            topo.listen_window_ms = topo_req.listen_window_ms
+            topo_updates["listen_window_ms"] = topo.listen_window_ms
+            topology_hot_reload = True
+        if topo_req.listen_window_max_ms is not None:
+            if topo_req.listen_window_max_ms < topo.listen_window_ms:
+                raise HTTPException(
+                    400,
+                    "listen_window_max_ms must be >= listen_window_ms",
+                )
+            topo.listen_window_max_ms = topo_req.listen_window_max_ms
+            topo_updates["listen_window_max_ms"] = topo.listen_window_max_ms
+            topology_hot_reload = True
+        if topo_req.suppression_enabled is not None:
+            topo.suppression_enabled = topo_req.suppression_enabled
+            topo_updates["suppression_enabled"] = topo.suppression_enabled
+            topology_hot_reload = True
+        if topo_req.suppression_min_neighbors is not None:
+            topo.suppression_min_neighbors = topo_req.suppression_min_neighbors
+            topo_updates["suppression_min_neighbors"] = topo.suppression_min_neighbors
+            topology_hot_reload = True
+        if topo_req.suppression_overlap_percent is not None:
+            topo.suppression_overlap_percent = topo_req.suppression_overlap_percent
+            topo_updates["suppression_overlap_percent"] = topo.suppression_overlap_percent
+            topology_hot_reload = True
+        if topo_req.graph_max_age_seconds is not None:
+            topo.graph_max_age_seconds = topo_req.graph_max_age_seconds
+            topo_updates["graph_max_age_seconds"] = topo.graph_max_age_seconds
+            topology_hot_reload = True
+        if topo_updates:
+            updates["topology"] = {
+                "enabled": topo.enabled,
+                "listen_window_ms": topo.listen_window_ms,
+                "listen_window_max_ms": topo.listen_window_max_ms,
+                "suppression_enabled": topo.suppression_enabled,
+                "suppression_min_neighbors": topo.suppression_min_neighbors,
+                "suppression_overlap_percent": topo.suppression_overlap_percent,
+                "graph_max_age_seconds": topo.graph_max_age_seconds,
+            }
+
     if not updates:
         return {"saved": False, "restart_required": False}
 
@@ -308,6 +368,9 @@ async def update_relay(
 
     if storm_guard_hot_reload and _relay_manager is not None:
         _relay_manager.reload_storm_guard(relay.storm_guard)
+
+    if topology_hot_reload and _relay_manager is not None:
+        _relay_manager.reload_topology(relay.topology)
 
     if hot_reload and _relay_manager is not None:
         _relay_manager.reload_filters(

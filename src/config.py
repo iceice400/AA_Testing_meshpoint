@@ -181,6 +181,19 @@ class StormGuardConfig:
 
 
 @dataclass
+class TopologyRelayConfig:
+    """Topology-aware relay optimizations (experimental, relay-only)."""
+
+    enabled: bool = False
+    listen_window_ms: int = 0
+    listen_window_max_ms: int = 400
+    suppression_enabled: bool = False
+    suppression_min_neighbors: int = 2
+    suppression_overlap_percent: float = 50.0
+    graph_max_age_seconds: int = 3600
+
+
+@dataclass
 class RelayConfig:
     enabled: bool = False
     serial_port: Optional[str] = None
@@ -194,6 +207,7 @@ class RelayConfig:
     dedup_ttl_seconds: int = 300
     channel_throttle_percent: dict[str, float] = field(default_factory=dict)
     storm_guard: StormGuardConfig = field(default_factory=StormGuardConfig)
+    topology: TopologyRelayConfig = field(default_factory=TopologyRelayConfig)
 
 
 @dataclass

@@ -137,6 +137,7 @@ class ConfigurationPanel {
                     <div data-cfg-meshradar></div>
                     <div data-cfg-relay-filters></div>
                     <div data-cfg-relay-throttle></div>
+                    <div data-cfg-relay-topology></div>
                     <div data-cfg-webhooks></div>
                 `;
                 if (window.AdvancedConfigCard) {
@@ -158,6 +159,11 @@ class ConfigurationPanel {
                     const card = new window.RelayThrottleCard(api);
                     card.mount(host.querySelector('[data-cfg-relay-throttle]'));
                     this._cards.set('relay-throttle', card);
+                }
+                if (window.RelayTopologyCard) {
+                    const card = new window.RelayTopologyCard(api);
+                    card.mount(host.querySelector('[data-cfg-relay-topology]'));
+                    this._cards.set('relay-topology', card);
                 }
                 if (window.WebhookStatusCard) {
                     const card = new window.WebhookStatusCard(api);
