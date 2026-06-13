@@ -195,12 +195,30 @@ class NodeMap {
 
     async _loadTopology() {
         try {
+            if (this._store) {
+                await this._store.refreshFromApi();
+            } else {
+                const res = await fetch('/api/analytics/topology?hours=24');
+                if (!res.ok) {
+                    console.warn('Topology overlay: API failed', res.status);
+                    return;
+                }
+                this._overlaySnap = await res.json();
+            }
+            this._redrawTopologyOverlayFromStore();
+        } catch (e) {
+            console.error('Topology load failed:', e);
+        }
+    }
+
+    _redrawTopologyOverlayFromStore() {
+        try {
             let links = [];
             let unplotted = [];
             let estimates = [];
+            let routes = [];
 
             if (this._store) {
-                await this._store.refreshFromApi();
                 const snap = this._store.getSnapshot();
                 links = (snap.edges || []).map((e) => ({
                     source: e.nodeA,
@@ -211,13 +229,9 @@ class NodeMap {
                 }));
                 unplotted = snap.unplotted || [];
                 estimates = snap.estimates || [];
-            } else {
-                const res = await fetch('/api/analytics/topology?hours=24');
-                if (!res.ok) {
-                    console.warn('Topology overlay: API failed', res.status);
-                    return;
-                }
-                const payload = await res.json();
+                routes = snap.routes || [];
+            } else if (this._overlaySnap) {
+                const payload = this._overlaySnap;
                 links = Array.isArray(payload)
                     ? payload
                     : (payload.edges || []);
@@ -228,50 +242,80 @@ class NodeMap {
                     latest_rssi: u.latest_rssi,
                 }));
                 estimates = payload.estimates || [];
+                routes = payload.routes || [];
+            } else {
+                return;
             }
 
-            const stubPool = this._mergeUnplottedEdgeEndpoints(unplotted, links);
-            this._renderDarkStubs(stubPool, estimates, true);
-
-            this._topologyLayer.clearLayers();
-            this._edgeLines?.clear?.();
-
-            let drawn = 0;
-            for (const link of links) {
-                const src = _normNodeId(link.source || link.nodeA);
-                const tgt = _normNodeId(link.target || link.nodeB);
-                const srcLl = this._resolveLatLng(src);
-                const tgtLl = this._resolveLatLng(tgt);
-                if (!srcLl || !tgtLl) continue;
-                drawn += 1;
-
-                const color = link.edge_type === 'neighborinfo'
-                    ? this._cssToken('--accent-cyan', '#06b6d4')
-                    : '#f59e0b';
-                const line = L.polyline(
-                    [srcLl, tgtLl],
-                    {
-                        color,
-                        weight: link.edge_type === 'neighborinfo' ? 2 : 1.5,
-                        opacity: 0.75,
-                        dashArray: link.edge_type === 'neighborinfo' ? null : '4, 4',
-                    },
-                );
-
-                const rssiLabel = link.rssi != null ? `RSSI: ${link.rssi} dBm` : '';
-                const snrLabel = link.snr != null ? `SNR: ${link.snr} dB` : '';
-                line.bindTooltip([
-                    `${src} ↔ ${tgt}`,
-                    rssiLabel,
-                    snrLabel,
-                ].filter(Boolean).join('<br>'));
-
-                this._topologyLayer.addLayer(line);
-            }
-
-            this._updateTopologyHint(links.length, drawn);
+            this._drawTopologyLinks(links, unplotted, estimates, routes);
         } catch (e) {
-            console.error('Topology load failed:', e);
+            console.error('Topology redraw failed:', e);
+        }
+    }
+
+    _drawTopologyLinks(links, unplotted, estimates, routes) {
+        const stubPool = this._mergeUnplottedEdgeEndpoints(unplotted, links, routes);
+        this._renderDarkStubs(stubPool, estimates, true);
+
+        this._topologyLayer.clearLayers();
+        if (this._edgeLines) this._edgeLines.clear();
+
+        let drawn = 0;
+        for (const link of links) {
+            const src = _normNodeId(link.source || link.nodeA);
+            const tgt = _normNodeId(link.target || link.nodeB);
+            const srcLl = this._resolveLatLng(src);
+            const tgtLl = this._resolveLatLng(tgt);
+            if (!srcLl || !tgtLl) continue;
+            drawn += 1;
+
+            const color = link.edge_type === 'neighborinfo'
+                ? this._cssToken('--accent-cyan', '#06b6d4')
+                : '#f59e0b';
+            const line = L.polyline(
+                [srcLl, tgtLl],
+                {
+                    color,
+                    weight: link.edge_type === 'neighborinfo' ? 2 : 1.5,
+                    opacity: 0.75,
+                    dashArray: link.edge_type === 'neighborinfo' ? null : '4, 4',
+                },
+            );
+
+            const rssiLabel = link.rssi != null ? `RSSI: ${link.rssi} dBm` : '';
+            const snrLabel = link.snr != null ? `SNR: ${link.snr} dB` : '';
+            line.bindTooltip([
+                `${src} ↔ ${tgt}`,
+                rssiLabel,
+                snrLabel,
+            ].filter(Boolean).join('<br>'));
+
+            this._topologyLayer.addLayer(line);
+        }
+
+        this._drawRoutePathsOverlay(routes);
+        this._updateTopologyHint(links.length, drawn);
+    }
+
+    _drawRoutePathsOverlay(routes) {
+        if (!routes?.length) return;
+        for (const route of routes.slice(0, 12)) {
+            const path = route.route || [];
+            const snrTowards = route.snr_towards || [];
+            for (let i = 0; i < path.length - 1; i += 1) {
+                const a = this._resolveLatLng(path[i]);
+                const b = this._resolveLatLng(path[i + 1]);
+                if (!a || !b) continue;
+                const snr = snrTowards[i];
+                const color = this._snrHopColor(snr);
+                const line = L.polyline([a, b], {
+                    color,
+                    weight: 4,
+                    opacity: 0.92,
+                    lineCap: 'round',
+                });
+                line.addTo(this._topologyLayer);
+            }
         }
     }
 
@@ -279,7 +323,7 @@ class NodeMap {
         if (this._topologyEnabled) {
             this.renderTopology();
         } else if (this._topologyVisible) {
-            this._loadTopology();
+            this._redrawTopologyOverlayFromStore();
         }
     }
 
@@ -316,11 +360,19 @@ class NodeMap {
             this._unsubStore = null;
         }
         this._store = store || null;
-        if (this._topologyEnabled && this._store) {
+        if (this._store) {
             this._unsubStore = this._store.onChange(() => {
-                this.renderTopology();
+                if (this._topologyEnabled) {
+                    this.renderTopology();
+                } else if (this._topologyVisible) {
+                    this._redrawTopologyOverlayFromStore();
+                }
             });
+        }
+        if (this._topologyEnabled && this._store) {
             this.renderTopology();
+        } else if (this._topologyVisible && this._store) {
+            this._redrawTopologyOverlayFromStore();
         }
     }
 
@@ -390,22 +442,42 @@ class NodeMap {
         this._hasFitBounds = true;
     }
 
-    _mergeUnplottedEdgeEndpoints(unplotted, edges) {
+    _hasPlottedCoords(id) {
+        if (!id) return false;
+        if (this._markers[id]) return true;
+        if (this._localNodeId && id === this._localNodeId && this._deviceMarker) return true;
+        if (this._store?.getNodeCoords?.(id)) return true;
+        const mesh = this._lastNodes?.find(
+            (n) => _normNodeId(n.node_id || n.id) === id,
+        );
+        return !!(mesh && _isValidGps(mesh.latitude, mesh.longitude));
+    }
+
+    _mergeUnplottedEdgeEndpoints(unplotted, edges, routes) {
         const byId = new Map(
             (unplotted || []).map((u) => [_normNodeId(u.id), { ...u, id: _normNodeId(u.id) }]),
         );
+        const ensure = (raw) => {
+            const id = _normNodeId(raw);
+            if (!id || this._hasPlottedCoords(id)) return;
+            if (!byId.has(id)) {
+                byId.set(id, {
+                    id,
+                    label: `!${id.slice(-4)}`,
+                    edge_count: 1,
+                    latest_rssi: null,
+                });
+            }
+        };
         for (const edge of edges || []) {
-            for (const raw of [edge.nodeA, edge.nodeB, edge.source, edge.target]) {
-                const id = _normNodeId(raw);
-                if (!id || this._resolveLatLng(id)) continue;
-                if (!byId.has(id)) {
-                    byId.set(id, {
-                        id,
-                        label: `!${id.slice(-4)}`,
-                        edge_count: 1,
-                        latest_rssi: null,
-                    });
-                }
+            ensure(edge.nodeA);
+            ensure(edge.nodeB);
+            ensure(edge.source);
+            ensure(edge.target);
+        }
+        for (const route of routes || []) {
+            for (const hop of route.route || []) {
+                ensure(hop);
             }
         }
         return [...byId.values()];
@@ -603,6 +675,7 @@ class NodeMap {
         const stubPool = this._mergeUnplottedEdgeEndpoints(
             snap.unplotted,
             snap.edges || [],
+            snap.routes || [],
         );
         this._renderDarkStubs(stubPool, snap.estimates || [], showDark);
         const drawnLinks = this._renderEdges(snap.edges, showEdges, mode);

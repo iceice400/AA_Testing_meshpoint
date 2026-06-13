@@ -406,6 +406,9 @@ async function _loadInitial(nodeMap, nodeList, packetFeed, topologyStore, knownN
             _syncTopologyNodes(nodes);
             await topologyStore.refreshFromApi();
         }
+        if (device?.node_id) {
+            nodeMap.setLocalNodeId(device.node_id);
+        }
         nodeMap.loadNodes(nodes, device);
         nodeMap.refreshTopologyOverlay?.();
         nodeList.loadNodes(nodes);
@@ -439,6 +442,9 @@ async function _refreshData(nodeMap, nodeList, packetFeed, topologyStore) {
         if (window.topologyStore && nodesRes.ok && nodes.length) {
             _syncTopologyNodes(nodes);
             await topologyStore.refreshFromApi();
+        }
+        if (device?.node_id) {
+            nodeMap.setLocalNodeId(device.node_id);
         }
         nodeMap.loadNodes(nodes, device);
         nodeMap.refreshTopologyOverlay?.();

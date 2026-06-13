@@ -154,9 +154,12 @@
             if (now - last < cooldown) return false;
 
             const type = (packet?.packet_type || '').toLowerCase();
-            if (type === 'traceroute' && packet?.decoded_payload) {
-                this._updateTraceMeta(nodeId, packet.decoded_payload);
-                return false;
+            if (window.TopologyTrace?.isTracePacket?.(packet)) {
+                const trace = window.TopologyTrace.bestTraceRoute(packet);
+                if (trace) {
+                    this._updateTraceMeta(nodeId, trace);
+                    return false;
+                }
             }
 
             const meta = this._traceMeta.get(nodeId);
@@ -168,13 +171,23 @@
         }
 
         _updateTraceMeta(nodeId, payload) {
-            const route = payload.route || [];
+            let trace = null;
+            if (Array.isArray(payload?.route) && payload.route.length >= 2) {
+                trace = {
+                    route: window.TopologyTrace.normRoute(payload.route),
+                    snr_towards: payload.snr_towards || payload.snrTowards || [],
+                    snr_back: payload.snr_back || payload.snrBack || [],
+                };
+            } else if (window.TopologyTrace?.bestTraceRoute) {
+                trace = window.TopologyTrace.bestTraceRoute({ decoded_payload: payload });
+            }
+            if (!trace) return;
             this._traceMeta.set(nodeId, {
-                hopCount: Math.max(0, route.length - 1),
-                lastHop: route.length ? route.length - 1 : null,
-                snrTowards: payload.snr_towards || [],
-                snrBack: payload.snr_back || [],
-                route,
+                hopCount: window.TopologyTrace.hopCount(trace.route),
+                lastHop: trace.route.length ? trace.route.length - 1 : null,
+                snrTowards: trace.snr_towards || [],
+                snrBack: trace.snr_back || [],
+                route: trace.route,
                 updatedAt: Date.now(),
             });
         }

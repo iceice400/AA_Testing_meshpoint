@@ -114,6 +114,10 @@
             if (node && _coordsValid(node.latitude, node.longitude)) {
                 return { lat: Number(node.latitude), lng: Number(node.longitude) };
             }
+            const est = this._estimates.get(id);
+            if (est && _coordsValid(est.lat, est.lng)) {
+                return { lat: Number(est.lat), lng: Number(est.lng) };
+            }
             return null;
         }
 
@@ -306,10 +310,12 @@
 
             const routeFields = type === 'traceroute'
                 ? [payload.route]
-                : [payload.route_reply, payload.route_request];
+                : [payload.route_reply, payload.route_request, payload.route];
+            let addedRoute = false;
             for (const route of routeFields) {
                 if (!Array.isArray(route) || route.length < 2) continue;
                 const routeIds = route.map((hop) => normalizeNodeId(hop)).filter(Boolean);
+                if (routeIds.length < 2) continue;
                 for (let i = 0; i < routeIds.length - 1; i++) {
                     this._upsertEdge(routeIds[i], routeIds[i + 1], {
                         rssi,
@@ -321,7 +327,7 @@
                         ts,
                     });
                 }
-                if (type === 'traceroute' && routeIds.length >= 2) {
+                if (!addedRoute && routeIds.length >= 2) {
                     this._routes.unshift({
                         source_id: sourceId,
                         route: routeIds,
@@ -331,6 +337,7 @@
                         last_seen: packet.timestamp || new Date(ts).toISOString(),
                     });
                     if (this._routes.length > 80) this._routes.length = 80;
+                    addedRoute = true;
                 }
             }
 

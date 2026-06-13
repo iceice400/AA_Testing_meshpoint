@@ -293,23 +293,18 @@ class TopologyTab {
     ingestPacket(packet) {
         const src = packet?.source_id;
         if (!src || !this._poller) return;
-        const srcNorm = src ? String(src).replace(/^!/, '').toLowerCase() : '';
-        const node = this._meshNodes.find(
-            (n) => String(n.node_id || n.id).replace(/^!/, '').toLowerCase() === srcNorm,
-        ) || { node_id: srcNorm || src, id: srcNorm || src };
-        this._poller.notePacket(node, packet);
-        if ((packet.packet_type || '').toLowerCase() === 'traceroute' && packet.decoded_payload) {
-            const route = packet.decoded_payload.route || [];
-            const dest = route.length
-                ? String(route[route.length - 1]).replace(/^!/, '').toLowerCase()
-                : (packet.source_id || '').replace(/^!/, '').toLowerCase();
-            this._poller.recordTraceReply(dest, packet.decoded_payload);
+
+        const trace = window.TopologyTrace?.bestTraceRoute?.(packet);
+        if (trace) {
+            const dest = trace.route[trace.route.length - 1];
+            this._poller.recordTraceReply(dest, trace);
             if (this._rendered) {
+                const hops = window.TopologyTrace.hopCount(trace.route);
                 this._intel?.pushAlert({
                     type: 'route',
                     node_id: dest,
                     node_name: dest,
-                    message: `Traceroute reply — ${route.length} hop(s).`,
+                    message: `Traceroute reply — ${hops} hop(s), ${trace.route.length} nodes.`,
                 });
                 const mesh = this._meshNodes.find(
                     (n) => (n.node_id || n.id || '').replace(/^!/, '').toLowerCase() === dest,
@@ -317,13 +312,21 @@ class TopologyTab {
                 if (mesh) {
                     this._selectNode(mesh);
                 } else if (this._selectedNode) {
-                    this._intel.setSelectedNode(this._selectedNode);
+                    this._intel?.setSelectedNode(this._selectedNode);
+                } else {
+                    this._intel?._renderTraceView?.();
                 }
                 if (this._topoMap && this._viewMode === 'map') {
                     this._topoMap.renderTopology();
                 }
             }
         }
+
+        const srcNorm = src ? String(src).replace(/^!/, '').toLowerCase() : '';
+        const node = this._meshNodes.find(
+            (n) => String(n.node_id || n.id).replace(/^!/, '').toLowerCase() === srcNorm,
+        ) || { node_id: srcNorm || src, id: srcNorm || src };
+        this._poller.notePacket(node, packet);
     }
 
     _selectNode(node) {
