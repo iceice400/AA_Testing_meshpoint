@@ -792,6 +792,36 @@ class NodeMap {
 
     updateFromPacket(packet) {
         if (!packet.source_id || !this._initialized) return;
+
+        const payload = packet.decoded_payload || {};
+        const type = (packet.packet_type || '').toLowerCase();
+        const lat = payload.latitude ?? payload.adv_lat;
+        const lon = payload.longitude ?? payload.adv_lon;
+        const hasCoords = lat != null && lon != null && !(lat === 0 && lon === 0);
+
+        if (!this._markers[packet.source_id] && hasCoords
+            && (type === 'nodeinfo' || type === 'position')) {
+            const node = {
+                node_id: packet.source_id,
+                latitude: lat,
+                longitude: lon,
+                protocol: packet.protocol || 'meshtastic',
+                long_name: payload.long_name || payload.short_name,
+                last_heard: packet.timestamp,
+                latest_rssi: packet.rssi ?? packet.signal?.rssi,
+            };
+            this._addNodeMarker(node);
+            if (Array.isArray(this._lastNodes)) {
+                this._lastNodes.push(node);
+            } else {
+                this._lastNodes = [node];
+            }
+            if (this._topologyEnabled) {
+                this.renderTopology();
+            }
+            return;
+        }
+
         const marker = this._markers[packet.source_id];
         if (!marker) return;
 

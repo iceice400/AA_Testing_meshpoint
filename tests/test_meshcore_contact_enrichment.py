@@ -92,6 +92,44 @@ class TestMeshCoreContactEnrichment(unittest.TestCase):
         self.assertEqual(ridge.long_name, "Ridge Repeater")
         self.assertEqual(valley.long_name, "Valley Node")
 
+    def test_contact_gps_updates_matching_meshcore_node(self):
+        _run(self.repo.upsert(Node(
+            node_id="e34ef4172778",
+            protocol="meshcore",
+        )))
+
+        updated = _run(sync_meshcore_contacts_to_nodes(
+            self.coord,
+            _MeshCoreTx([{
+                "public_key": "e34ef4172778aaaabbbbcccc",
+                "name": "Ridge Repeater",
+                "adv_lat": 28.5383,
+                "adv_lon": -81.3792,
+            }]),
+        ))
+
+        node = _run(self.repo.get_by_id("e34ef4172778"))
+        self.assertEqual(updated, 1)
+        self.assertAlmostEqual(node.latitude, 28.5383)
+        self.assertAlmostEqual(node.longitude, -81.3792)
+
+    def test_contact_creates_meshcore_node_when_missing(self):
+        updated = _run(sync_meshcore_contacts_to_nodes(
+            self.coord,
+            _MeshCoreTx([{
+                "public_key": "c1871770ebc1deadbeef",
+                "name": "Valley Node",
+                "adv_lat": 27.9506,
+                "adv_lon": -82.4572,
+            }]),
+        ))
+
+        node = _run(self.repo.get_by_id("c1871770ebc1"))
+        self.assertEqual(updated, 1)
+        self.assertEqual(node.long_name, "Valley Node")
+        self.assertAlmostEqual(node.latitude, 27.9506)
+        self.assertAlmostEqual(node.longitude, -82.4572)
+
 
 if __name__ == "__main__":
     unittest.main()

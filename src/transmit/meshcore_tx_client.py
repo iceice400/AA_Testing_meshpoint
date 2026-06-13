@@ -12,6 +12,8 @@ import logging
 from dataclasses import dataclass
 from typing import Optional
 
+from src.decode.meshcore_coords import meshcore_coords_from_mapping
+
 logger = logging.getLogger(__name__)
 
 # Companion firmware caps the advert name at roughly 32 ASCII bytes; the
@@ -491,12 +493,22 @@ class MeshCoreTxClient:
                 )
                 pk = entry.get("public_key", "")
                 if name and pk:
-                    contacts.append({
+                    contact = {
                         "index": i,
                         "name": name,
                         "public_key": pk,
                         "last_seen": entry.get("lastmod", 0),
-                    })
+                    }
+                    for key in (
+                        "adv_lat", "adv_lon", "advLat", "advLon",
+                        "latitude", "longitude", "lat", "lon", "lng",
+                    ):
+                        if key in entry:
+                            contact[key] = entry[key]
+                    coords = meshcore_coords_from_mapping(entry)
+                    if coords:
+                        contact["latitude"], contact["longitude"] = coords
+                    contacts.append(contact)
             except Exception:
                 logger.debug(
                     "get_contacts: skipping malformed entry at index %d",

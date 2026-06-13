@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 
 from src.decode.crypto_service import CryptoService
+from src.decode.meshcore_coords import meshcore_coords_from_mapping
 from src.models.node import Node
 from src.models.packet import Packet, PacketType, Protocol
 from src.models.signal import SignalMetrics
@@ -186,10 +187,27 @@ class MeshcoreDecoder:
 
         if packet.packet_type == PacketType.NODEINFO:
             node.long_name = packet.decoded_payload.get("long_name")
+            node.short_name = packet.decoded_payload.get("short_name")
+            node.public_key = packet.decoded_payload.get("public_key")
             self._apply_position(node, packet.decoded_payload)
 
         if packet.packet_type == PacketType.POSITION:
             self._apply_position(node, packet.decoded_payload)
+
+        if packet.packet_type == PacketType.TEXT:
+            name = packet.decoded_payload.get("long_name")
+            if not name:
+                return None
+            node.long_name = name
+            node.short_name = name[:4]
+
+        if not (
+            node.long_name
+            or node.short_name
+            or node.has_position
+            or node.public_key
+        ):
+            return None
 
         node.latest_signal = packet.signal
         return node
@@ -197,12 +215,9 @@ class MeshcoreDecoder:
     @staticmethod
     def _apply_position(node: Node, payload: dict[str, Any]) -> None:
         """Copy lat/lon onto ``node`` when the payload carries both."""
-        lat = payload.get("latitude")
-        lon = payload.get("longitude")
-        if lat is None or lon is None:
-            return
-        node.latitude = lat
-        node.longitude = lon
+        coords = meshcore_coords_from_mapping(payload)
+        if coords:
+            node.latitude, node.longitude = coords
 
     def extract_telemetry(self, packet: Packet) -> Optional[Telemetry]:
         if packet.packet_type != PacketType.TELEMETRY:

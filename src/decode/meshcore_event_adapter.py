@@ -14,6 +14,7 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional
 
+from src.decode.meshcore_coords import meshcore_coords_from_mapping
 from src.models.packet import Packet, PacketType, Protocol
 from src.models.signal import SignalMetrics
 
@@ -152,11 +153,9 @@ def _build_advertisement(
     if name and not _looks_like_identifier(name, source_id, pubkey):
         decoded["long_name"] = name
         decoded["short_name"] = name[:4]
-    lat = payload.get("adv_lat")
-    lon = payload.get("adv_lon")
-    if lat and lon:
-        decoded["latitude"] = lat
-        decoded["longitude"] = lon
+    coords = meshcore_coords_from_mapping(payload)
+    if coords:
+        decoded["latitude"], decoded["longitude"] = coords
     return Packet(
         packet_id=_generate_id(),
         source_id=source_id,

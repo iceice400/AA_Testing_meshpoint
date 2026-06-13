@@ -28,6 +28,8 @@ import logging
 import time
 
 from src.models.packet import Packet, Protocol
+from src.decode.meshcore_coords import meshcore_coords_from_mapping
+from src.models.node import Node
 
 logger = logging.getLogger(__name__)
 
@@ -157,6 +159,10 @@ async def sync_meshcore_contacts_to_nodes(
             continue
         prefixes = _meshcore_pubkey_prefixes(pk)
         short_name = name[:4]
+        coords = meshcore_coords_from_mapping(contact)
+        lat = coords[0] if coords else None
+        lon = coords[1] if coords else None
+        matched = False
         for prefix in prefixes:
             cursor = await coord.node_repo._db.execute(
                 """
@@ -168,20 +174,43 @@ async def sync_meshcore_contacts_to_nodes(
                           OR LOWER(LTRIM(short_name, '!')) = LOWER(SUBSTR(LTRIM(node_id, '!'), 1, 4))
                             THEN ?
                         ELSE short_name
-                    END
+                    END,
+                    latitude = CASE
+                        WHEN ? IS NOT NULL THEN ?
+                        ELSE latitude
+                    END,
+                    longitude = CASE
+                        WHEN ? IS NOT NULL THEN ?
+                        ELSE longitude
+                    END,
+                    public_key = COALESCE(public_key, ?)
                 WHERE protocol = 'meshcore'
                   AND LOWER(LTRIM(node_id, '!')) LIKE ?
                 """,
-                (name, short_name, prefix + "%"),
+                (name, short_name, lat, lat, lon, lon, pk, prefix + "%"),
             )
             if cursor.rowcount and cursor.rowcount > 0:
                 updated += cursor.rowcount
+                matched = True
                 break
+
+        if not matched:
+            node_id = pk[:12] if len(pk) >= 12 else pk
+            await coord.node_repo.upsert(Node(
+                node_id=node_id,
+                long_name=name,
+                short_name=short_name,
+                protocol="meshcore",
+                public_key=pk,
+                latitude=lat,
+                longitude=lon,
+            ))
+            updated += 1
 
     if updated:
         await coord.node_repo._db.commit()
         logger.info(
-            "MeshCore contact names applied to %d node row(s)", updated,
+            "MeshCore contact roster applied to %d node row(s)", updated,
         )
     return updated
 
