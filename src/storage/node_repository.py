@@ -147,38 +147,40 @@ class NodeRepository:
         missing = [n["node_id"] for n in nodes if n.get("latitude") is None]
         if not missing:
             return
-        pos_map = await self._latest_positions_for(missing)
+        pos_map = await self._load_latest_position_map()
+        missing_set = set(missing)
         for node in nodes:
             nid = node.get("node_id")
-            if node.get("latitude") is not None or nid not in pos_map:
+            if node.get("latitude") is not None or nid not in missing_set:
                 continue
-            lat, lon = pos_map[nid]
+            coords = pos_map.get(nid)
+            if not coords:
+                continue
+            lat, lon = coords
             node["latitude"] = lat
             node["longitude"] = lon
             node["has_position"] = True
 
-    async def _latest_positions_for(
-        self, node_ids: list[str],
-    ) -> dict[str, tuple[float, float]]:
-        if not node_ids:
-            return {}
-        placeholders = ",".join("?" * len(node_ids))
+    async def _load_latest_position_map(self) -> dict[str, tuple[float, float]]:
+        """One query for the newest position packet per source (no huge IN lists)."""
         rows = await self._db.fetch_all(
-            f"""
+            """
             SELECT source_id, decoded_payload
-            FROM packets
-            WHERE packet_type = 'position'
-              AND source_id IN ({placeholders})
-              AND decoded_payload IS NOT NULL
-            ORDER BY timestamp DESC
-            """,
-            tuple(node_ids),
+            FROM (
+                SELECT source_id, decoded_payload,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY source_id ORDER BY timestamp DESC
+                       ) AS rn
+                FROM packets
+                WHERE packet_type = 'position'
+                  AND decoded_payload IS NOT NULL
+            )
+            WHERE rn = 1
+            """
         )
         out: dict[str, tuple[float, float]] = {}
         for row in rows:
             sid = row["source_id"]
-            if sid in out:
-                continue
             try:
                 payload = json.loads(row["decoded_payload"])
             except (json.JSONDecodeError, TypeError):

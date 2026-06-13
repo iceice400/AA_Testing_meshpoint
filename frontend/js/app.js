@@ -347,6 +347,12 @@ function _openMessagingForNode(node) {
     }, 100);
 }
 
+function _parseNodesResponse(data) {
+    if (Array.isArray(data)) return data;
+    if (data && Array.isArray(data.nodes)) return data.nodes;
+    return [];
+}
+
 async function _loadInitial(nodeMap, nodeList, packetFeed, topologyStore, knownNodeIds) {
     try {
         const [deviceRes, nodesRes, packetsRes] = await Promise.all([
@@ -354,17 +360,17 @@ async function _loadInitial(nodeMap, nodeList, packetFeed, topologyStore, knownN
             fetch('/api/nodes?enrich=true'),
             fetch('/api/packets?limit=50'),
         ]);
-        const device = await deviceRes.json();
-        const nodesData = await nodesRes.json();
-        const packetsData = await packetsRes.json();
+        const device = deviceRes.ok ? await deviceRes.json() : {};
+        const nodesData = nodesRes.ok ? await nodesRes.json() : null;
+        const packetsData = packetsRes.ok ? await packetsRes.json() : { packets: [] };
 
         _setText('sidebar-device-name', _resolveDeviceLabel(device));
 
-        const nodes = nodesData.nodes || nodesData || [];
+        const nodes = nodesRes.ok ? _parseNodesResponse(nodesData) : [];
         for (const n of nodes) {
             if (n.node_id) knownNodeIds.add(n.node_id);
         }
-        if (window.topologyStore && nodes.length) {
+        if (window.topologyStore && nodesRes.ok) {
             topologyStore.syncMeshNodes(nodes);
             await topologyStore.refreshFromApi();
         }
@@ -392,10 +398,10 @@ async function _refreshData(nodeMap, nodeList, packetFeed, topologyStore) {
             fetch('/api/nodes?enrich=true'),
             fetch('/api/device'),
         ]);
-        const data = await nodesRes.json();
-        const nodes = data.nodes || data || [];
+        const data = nodesRes.ok ? await nodesRes.json() : null;
+        const nodes = nodesRes.ok ? _parseNodesResponse(data) : [];
         const device = deviceRes.ok ? await deviceRes.json() : undefined;
-        if (window.topologyStore && nodes.length) {
+        if (window.topologyStore && nodesRes.ok) {
             topologyStore.syncMeshNodes(nodes);
             await topologyStore.refreshFromApi();
         }

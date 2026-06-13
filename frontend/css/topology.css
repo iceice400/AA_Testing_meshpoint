@@ -192,6 +192,21 @@
     font-style: italic;
 }
 
+.topo-roster__reset-filters {
+    display: block;
+    margin-top: 0.45rem;
+    font-family: var(--font-mono);
+    font-size: 0.58rem;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    background: var(--bg-primary);
+    color: var(--accent-cyan);
+    padding: 0.2rem 0.45rem;
+    cursor: pointer;
+}
+
 /* Node cards */
 .topo-nc {
     padding: 0.5rem 0.65rem;

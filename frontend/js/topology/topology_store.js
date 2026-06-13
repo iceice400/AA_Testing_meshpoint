@@ -130,12 +130,8 @@
         }
 
         /** Mesh nodes from GET /api/nodes — GPS, names, roles. */
-        syncMeshNodes(nodes, { replace = true } = {}) {
-            if (!nodes?.length) {
-                if (replace) return;
-            } else if (replace) {
-                this._meshNodes.clear();
-            }
+        syncMeshNodes(nodes) {
+            this._meshNodes.clear();
             for (const n of nodes || []) {
                 const id = normalizeNodeId(n.node_id || n.id);
                 if (!id) continue;
@@ -173,7 +169,6 @@
         loadFromApi(data) {
             if (!data || typeof data !== 'object') return;
             this._fetchedAt = Date.now();
-            this._edges.clear();
             this._routes = Array.isArray(data.routes)
                 ? data.routes.map((r) => ({
                     ...r,

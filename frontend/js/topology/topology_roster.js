@@ -89,7 +89,22 @@
             list.innerHTML = '';
 
             if (!filtered.length) {
-                list.innerHTML = '<div class="topo-roster__empty">No nodes match filters.</div>';
+                if (this._nodes.length) {
+                    list.innerHTML = `
+                        <div class="topo-roster__empty">
+                            No nodes match filters.
+                            <button type="button" class="topo-roster__reset-filters">Show all</button>
+                        </div>`;
+                    list.querySelector('.topo-roster__reset-filters')?.addEventListener('click', () => {
+                        this._filters = new Set(ROLE_FILTERS.map((f) => f.id));
+                        this._host?.querySelectorAll('[data-rf]').forEach((btn) => {
+                            btn.classList.add('topo-rf-btn--on');
+                        });
+                        this.render(this._nodes);
+                    });
+                } else {
+                    list.innerHTML = '<div class="topo-roster__empty">No nodes loaded.</div>';
+                }
                 return;
             }
 

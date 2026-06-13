@@ -76,30 +76,15 @@ class TopologyTab {
     async _loadData() {
         const [topoRes, nodesRes, deviceRes, statusRes, configRes] = await Promise.all([
             fetch(`/api/analytics/topology?hours=${this._hours}`),
-            fetch('/api/nodes?enrich=true&limit=2000'),
+            fetch('/api/nodes?enrich=true&limit=500'),
             fetch('/api/device'),
             fetch('/api/analytics/topology/status', { credentials: 'same-origin' }),
             fetch('/api/config', { credentials: 'same-origin' }),
         ]);
-        if (topoRes.ok) {
-            this._graph = await topoRes.json();
-            this._fetchedAt = Date.now();
-            if (window.topologyStore) {
-                window.topologyStore.setHours(this._hours);
-                window.topologyStore.loadFromApi(this._graph);
-            }
-        }
-        const nodesData = nodesRes.ok ? await nodesRes.json() : null;
-        const parsed = Array.isArray(nodesData)
-            ? nodesData
-            : (nodesData?.nodes || []);
-        if (nodesRes.ok && parsed.length) {
-            this._meshNodes = parsed;
-            if (window.topologyStore) {
-                window.topologyStore.syncMeshNodes(this._meshNodes);
-            }
-        } else if (nodesRes.ok) {
-            this._meshNodes = parsed;
+
+        if (nodesRes.ok) {
+            const nodesData = await nodesRes.json();
+            this._meshNodes = TopologyTab._parseNodesResponse(nodesData);
             if (window.topologyStore) {
                 window.topologyStore.syncMeshNodes(this._meshNodes);
             }
@@ -109,6 +94,16 @@ class TopologyTab {
                 this._meshNodes = window.topologyStore.getMeshNodeList();
             }
         }
+
+        if (topoRes.ok) {
+            this._graph = await topoRes.json();
+            this._fetchedAt = Date.now();
+            if (window.topologyStore) {
+                window.topologyStore.setHours(this._hours);
+                window.topologyStore.loadFromApi(this._graph);
+            }
+        }
+
         this._device = deviceRes.ok ? await deviceRes.json() : null;
         if (this._intel && this._device?.node_id) {
             this._intel.setDeviceId(this._device.node_id);
@@ -441,12 +436,12 @@ class TopologyTab {
         this._topoMap.renderTopology();
         const refit = () => {
             this._topoMap?._map?.invalidateSize();
-            if (this._topoMap && Object.keys(this._topoMap._markers || {}).length) {
+            if (this._topoMap && !this._topoMap._hasFitBounds
+                && Object.keys(this._topoMap._markers || {}).length) {
                 this._topoMap.refitToMarkers();
             }
         };
         setTimeout(refit, 150);
-        setTimeout(refit, 500);
     }
 
     _filterActiveNodes(nodes) {
@@ -569,6 +564,12 @@ class TopologyTab {
                     .attr('x2', (d) => d.target.x).attr('y2', (d) => d.target.y);
                 node.attr('cx', (d) => d.x).attr('cy', (d) => d.y);
             });
+    }
+
+    static _parseNodesResponse(data) {
+        if (Array.isArray(data)) return data;
+        if (data && Array.isArray(data.nodes)) return data.nodes;
+        return [];
     }
 }
 
