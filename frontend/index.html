@@ -35,6 +35,7 @@
     <link rel="stylesheet" href="css/packet_detail_modal.css" />
     <link rel="stylesheet" href="css/map_coverage.css" />
     <link rel="stylesheet" href="css/stats.css" />
+    <link rel="stylesheet" href="css/packets.css" />
     <link rel="stylesheet" href="css/topology.css" />
     <link rel="stylesheet" href="css/status_strip.css" />
     <link rel="stylesheet" href="css/map_topology.css" />
@@ -107,6 +108,18 @@
                                 </svg>
                             </span>
                             <span class="sidebar__label">Stats</span>
+                        </a>
+                    </li>
+                    <li class="sidebar__item">
+                        <a href="#/packets" class="sidebar__link" data-route="packets">
+                            <span class="sidebar__icon">
+                                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                                    <rect x="3" y="4" width="18" height="16" rx="2"/>
+                                    <line x1="3" y1="9" x2="21" y2="9"/>
+                                    <line x1="8" y1="4" x2="8" y2="20"/>
+                                </svg>
+                            </span>
+                            <span class="sidebar__label">Packets</span>
                         </a>
                     </li>
                     <li class="sidebar__item">
@@ -407,6 +420,7 @@
                         <div class="panel">
                             <div class="panel__header">
                                 Packets
+                                <a href="#/packets" class="packets-open-full" title="Open packet browser">Browse all →</a>
                                 <span class="packet-count" id="packet-count">0</span>
                             </div>
                             <div class="panel__body">
@@ -444,6 +458,9 @@
                 <div id="stats-panel" class="stats-panel">
                     <div class="stats-panel__loading">Loading stats...</div>
                 </div>
+            </section>
+            <section class="section" data-section="packets" style="display:none">
+                <div id="packets-panel"></div>
             </section>
             <section class="section" data-section="topology" style="display:none">
                 <div id="topology-panel"></div>
@@ -798,6 +815,7 @@
     <script src="js/unknown_rf_tab.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/d3@7.9.0/dist/d3.min.js"></script>
     <script src="js/status_strip.js"></script>
+    <script src="js/packets_tab.js"></script>
     <script src="js/topology_tab.js"></script>
     <script src="js/traffic_heatmap.js"></script>
     <script src="js/stats_tab.js"></script>

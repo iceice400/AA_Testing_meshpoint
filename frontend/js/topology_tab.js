@@ -25,6 +25,8 @@ class TopologyTab {
         this._viewMode = 'graph';
         this._topoMap = null;
         this._dock = null;
+        this._physics = { charge: -220, distance: 85, gravity: 0.08, frozen: false };
+        this._centrality = {};
     }
 
     async refresh() {
@@ -107,6 +109,26 @@ class TopologyTab {
                     </section>
 
                     <section class="topo-sidebar__section">
+                        <div class="topo-sidebar__section-title">Simulation</div>
+                        <label class="topo-field">
+                            <span>Repulsion <strong id="topo-phys-charge-val">-220</strong></span>
+                            <input type="range" id="topo-phys-charge" min="-500" max="-80" value="-220" step="10" />
+                        </label>
+                        <label class="topo-field">
+                            <span>Link distance <strong id="topo-phys-dist-val">85</strong></span>
+                            <input type="range" id="topo-phys-dist" min="40" max="180" value="85" step="5" />
+                        </label>
+                        <label class="topo-field">
+                            <span>Center gravity <strong id="topo-phys-grav-val">0.08</strong></span>
+                            <input type="range" id="topo-phys-grav" min="0" max="30" value="8" step="1" />
+                        </label>
+                        <div class="topo-btn-row">
+                            <button type="button" class="topo-btn" id="topo-freeze">Freeze layout</button>
+                            <button type="button" class="topo-btn" id="topo-pin">Pin all</button>
+                        </div>
+                    </section>
+
+                    <section class="topo-sidebar__section">
                         <div class="topo-sidebar__section-title">Controls</div>
                         <div class="topo-btn-row">
                             <button type="button" class="topo-btn" id="topo-center">Center graph</button>
@@ -173,7 +195,7 @@ class TopologyTab {
                             <span><i class="topo-swatch topo-swatch--tr"></i> Traceroute path</span>
                             <span><i class="topo-swatch topo-swatch--rt"></i> Routing path</span>
                             <span><i class="topo-swatch topo-swatch--weak"></i> Weak signal</span>
-                            <span class="topo-sidebar__hint">Node size = traffic · Link thickness = SNR</span>
+                            <span class="topo-sidebar__hint">Node size = traffic + bridge centrality · Link thickness = SNR</span>
                         </div>
                     </section>
 
@@ -250,6 +272,48 @@ class TopologyTab {
         document.getElementById('topo-center')?.addEventListener('click', () => this._centerGraph());
         document.getElementById('topo-reset')?.addEventListener('click', () => this._resetZoom());
         document.getElementById('topo-refresh')?.addEventListener('click', () => this.refresh());
+
+        ['charge', 'dist', 'grav'].forEach((key) => {
+            const input = document.getElementById(`topo-phys-${key}`);
+            input?.addEventListener('input', () => {
+                if (key === 'charge') this._physics.charge = Number(input.value);
+                if (key === 'dist') this._physics.distance = Number(input.value);
+                if (key === 'grav') this._physics.gravity = Number(input.value) / 100;
+                const valEl = document.getElementById(`topo-phys-${key}-val`);
+                if (valEl) {
+                    valEl.textContent = key === 'grav'
+                        ? this._physics.gravity.toFixed(2)
+                        : String(this._physics[key]);
+                }
+                if (this._viewMode === 'graph') this._renderGraph();
+            });
+        });
+
+        document.getElementById('topo-freeze')?.addEventListener('click', (e) => {
+            this._physics.frozen = !this._physics.frozen;
+            e.currentTarget.classList.toggle('topo-btn--active', this._physics.frozen);
+            e.currentTarget.textContent = this._physics.frozen ? 'Unfreeze' : 'Freeze layout';
+            if (this._physics.frozen && this._simulation) {
+                this._simulation.stop();
+            } else if (this._rendered) {
+                this._renderGraph();
+            }
+        });
+
+        document.getElementById('topo-pin')?.addEventListener('click', () => {
+            if (!this._simulation) return;
+            this._simulation.nodes().forEach((n) => {
+                n.fx = n.x;
+                n.fy = n.y;
+            });
+            this._physics.frozen = true;
+            this._simulation.stop();
+            const btn = document.getElementById('topo-freeze');
+            if (btn) {
+                btn.classList.add('topo-btn--active');
+                btn.textContent = 'Unfreeze';
+            }
+        });
 
         this._container.querySelectorAll('[data-view]').forEach((btn) => {
             btn.addEventListener('click', () => {
@@ -463,8 +527,64 @@ class TopologyTab {
         }
         const node = (this._graph.nodes || []).find((n) => n.id === this._selectedNode);
         const label = node?.label || this._selectedNode;
-        el.innerHTML = `<strong>${this._esc(label)}</strong><br>ID: !${this._esc(this._selectedNode)}<br>` +
+        const cent = this._centrality[this._selectedNode];
+        const centTxt = cent != null ? `<br>Centrality: ${cent.toFixed(2)}` : '';
+        el.innerHTML = `<strong>${this._esc(label)}</strong><br>ID: !${this._esc(this._selectedNode)}${centTxt}<br>` +
             `Routes highlighted · click again to clear`;
+    }
+
+    _computeCentrality(nodes, edges) {
+        const ids = nodes.map((n) => n.id);
+        const adj = {};
+        for (const id of ids) adj[id] = [];
+        for (const e of edges) {
+            const a = String(typeof e.source === 'object' ? e.source.id : e.source);
+            const b = String(typeof e.target === 'object' ? e.target.id : e.target);
+            if (!adj[a] || !adj[b]) continue;
+            adj[a].push(b);
+            adj[b].push(a);
+        }
+        const centrality = {};
+        for (const id of ids) centrality[id] = 0;
+        const sample = nodes.slice(0, Math.min(30, nodes.length));
+        for (const src of sample) {
+            const stack = [];
+            const pred = {};
+            const sigma = {};
+            const dist = {};
+            const delta = {};
+            for (const id of ids) {
+                pred[id] = [];
+                sigma[id] = 0;
+                dist[id] = -1;
+                delta[id] = 0;
+            }
+            sigma[src.id] = 1;
+            dist[src.id] = 0;
+            const queue = [src.id];
+            while (queue.length) {
+                const v = queue.shift();
+                stack.push(v);
+                for (const w of adj[v] || []) {
+                    if (dist[w] < 0) {
+                        queue.push(w);
+                        dist[w] = dist[v] + 1;
+                    }
+                    if (dist[w] === dist[v] + 1) {
+                        sigma[w] += sigma[v];
+                        pred[w].push(v);
+                    }
+                }
+            }
+            while (stack.length) {
+                const w = stack.pop();
+                for (const v of pred[w]) {
+                    delta[v] += (sigma[v] / sigma[w]) * (1 + delta[w]);
+                }
+                if (w !== src.id) centrality[w] += delta[w];
+            }
+        }
+        return centrality;
     }
 
     _updateHoverPanel(d) {
@@ -482,8 +602,10 @@ class TopologyTab {
             return;
         }
         const rssi = d.latest_rssi != null ? `${d.latest_rssi} dBm` : 'n/a';
+        const cent = this._centrality[d.id];
+        const centTxt = cent != null ? `<br>Centrality: ${cent.toFixed(2)}` : '';
         el.innerHTML = `<strong>${this._esc(d.label)}</strong><br>!${this._esc(d.id)}<br>` +
-            `${d.packet_count || 0} pkts · ${rssi}`;
+            `${d.packet_count || 0} pkts · ${rssi}${centTxt}`;
     }
 
     _esc(text) {
@@ -594,8 +716,14 @@ class TopologyTab {
             svg.call(this._zoomBehavior.transform, this._zoomTransform);
         }
 
+        this._centrality = this._computeCentrality(nodes, edges);
+        const maxCent = Math.max(1, ...Object.values(this._centrality));
         const maxPackets = Math.max(1, ...nodes.map((n) => n.packet_count || 0));
-        const radius = (count) => 5 + (count / maxPackets) * 16;
+        const radius = (d) => {
+            const traffic = 5 + ((d.packet_count || 0) / maxPackets) * 10;
+            const bridge = ((this._centrality[d.id] || 0) / maxCent) * 8;
+            return traffic + bridge;
+        };
 
         const routeEdgeKeys = this._routeEdgeKeys(this._selectedNode);
 
@@ -635,7 +763,7 @@ class TopologyTab {
             .selectAll('circle')
             .data(nodes)
             .join('circle')
-            .attr('r', (d) => radius(d.packet_count || 0))
+            .attr('r', (d) => radius(d))
             .attr('fill', (d) => (d.protocol === 'meshcore' ? accentPurple : accentCyan))
             .attr('stroke', (d) => (d.id === this._selectedNode ? textPrimary : 'rgba(15,23,42,0.8)'))
             .attr('stroke-width', (d) => (d.id === this._selectedNode ? 2.5 : 1))
@@ -655,11 +783,12 @@ class TopologyTab {
         node.on('mouseout', () => this._updateHoverPanel(null));
 
         if (this._simulation) this._simulation.stop();
+        const phys = this._physics;
         this._simulation = d3.forceSimulation(nodes)
-            .force('link', d3.forceLink(edges).id((d) => d.id).distance(85).strength(0.55))
-            .force('charge', d3.forceManyBody().strength(-220))
-            .force('center', d3.forceCenter(width / 2, height / 2))
-            .force('collide', d3.forceCollide().radius((d) => radius(d.packet_count || 0) + 5))
+            .force('link', d3.forceLink(edges).id((d) => d.id).distance(phys.distance).strength(0.55))
+            .force('charge', d3.forceManyBody().strength(phys.charge))
+            .force('center', d3.forceCenter(width / 2, height / 2).strength(phys.gravity))
+            .force('collide', d3.forceCollide().radius((d) => radius(d) + 5))
             .on('tick', () => {
                 link
                     .attr('x1', (d) => d.source.x)
@@ -670,6 +799,9 @@ class TopologyTab {
                     .attr('cx', (d) => d.x)
                     .attr('cy', (d) => d.y);
             });
+        if (phys.frozen) {
+            this._simulation.stop();
+        }
     }
 
     _edgeKey(edge) {

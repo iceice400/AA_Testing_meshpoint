@@ -41,7 +41,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const router = new Router({
         defaultRoute: 'dashboard',
         allowedRoutes: [
-            'dashboard', 'stats', 'topology', 'messages', 'radio', 'rf', 'unknown-rf', 'terminal',
+            'dashboard', 'stats', 'packets', 'topology', 'messages', 'radio', 'rf', 'unknown-rf', 'terminal',
             'configuration/identity', 'configuration/radio',
             'configuration/channels', 'configuration/transmit',
             'configuration/mqtt',
@@ -201,6 +201,7 @@ document.addEventListener('DOMContentLoaded', async () => {
         }
 
         packetFeed.addPacket(packet);
+        window.packetsTab?.ingestPacket(packet);
         nodeMap.updateFromPacket(packet);
         nodeCards.updateFromPacket(packet);
         _incrementPacketCount();
@@ -565,6 +566,7 @@ function _bootCommandPaletteAndKeymap(router) {
     const routeCommands = [
         ['dashboard', 'Go to Dashboard', 'Pages'],
         ['stats', 'Go to Stats', 'Pages'],
+        ['packets', 'Go to Packets', 'Pages'],
         ['topology', 'Go to Topology', 'Pages'],
         ['messages', 'Go to Messages', 'Pages'],
         ['radio', 'Go to Radio', 'Pages'],
