@@ -183,41 +183,66 @@ class NodeMap {
 
     async _loadTopology() {
         try {
-            const res = await fetch('/api/analytics/topology?hours=24');
-            if (!res.ok) return;
-            const payload = await res.json();
-            const links = Array.isArray(payload)
-                ? payload
-                : (payload.edges || []);
+            let links = [];
+            let unplotted = [];
+            let estimates = [];
 
-            const unplotted = (payload.unplotted || []).map((u) => ({
-                id: u.id,
-                label: u.label || u.id,
-                edge_count: u.edge_count || 0,
-                latest_rssi: u.latest_rssi,
-            }));
+            if (this._store) {
+                await this._store.refreshFromApi();
+                const snap = this._store.getSnapshot();
+                links = (snap.edges || []).map((e) => ({
+                    source: e.nodeA,
+                    target: e.nodeB,
+                    rssi: e.rssi,
+                    snr: e.snr,
+                    edge_type: e.edge_type,
+                }));
+                unplotted = snap.unplotted || [];
+                estimates = snap.estimates || [];
+            } else {
+                const res = await fetch('/api/analytics/topology?hours=24');
+                if (!res.ok) {
+                    console.warn('Topology overlay: API failed', res.status);
+                    return;
+                }
+                const payload = await res.json();
+                links = Array.isArray(payload)
+                    ? payload
+                    : (payload.edges || []);
+                unplotted = (payload.unplotted || []).map((u) => ({
+                    id: u.id,
+                    label: u.label || u.id,
+                    edge_count: u.edge_count || 0,
+                    latest_rssi: u.latest_rssi,
+                }));
+                estimates = payload.estimates || [];
+            }
+
             const stubPool = this._mergeUnplottedEdgeEndpoints(unplotted, links);
-            this._renderDarkStubs(stubPool, payload.estimates || [], true);
+            this._renderDarkStubs(stubPool, estimates, true);
 
             this._topologyLayer.clearLayers();
             this._edgeLines?.clear?.();
 
             let drawn = 0;
             for (const link of links) {
-                const src = _normNodeId(link.source);
-                const tgt = _normNodeId(link.target);
+                const src = _normNodeId(link.source || link.nodeA);
+                const tgt = _normNodeId(link.target || link.nodeB);
                 const srcLl = this._resolveLatLng(src);
                 const tgtLl = this._resolveLatLng(tgt);
                 if (!srcLl || !tgtLl) continue;
                 drawn += 1;
 
+                const color = link.edge_type === 'neighborinfo'
+                    ? this._cssToken('--accent-cyan', '#06b6d4')
+                    : '#f59e0b';
                 const line = L.polyline(
                     [srcLl, tgtLl],
                     {
-                        color: '#f59e0b',
-                        weight: 1.5,
-                        opacity: 0.6,
-                        dashArray: '4, 4',
+                        color,
+                        weight: link.edge_type === 'neighborinfo' ? 2 : 1.5,
+                        opacity: 0.75,
+                        dashArray: link.edge_type === 'neighborinfo' ? null : '4, 4',
                     },
                 );
 

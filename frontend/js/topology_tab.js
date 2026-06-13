@@ -82,6 +82,18 @@ class TopologyTab {
         return this._storeRef || window.topologyStore || null;
     }
 
+    /** Called from app.js when dashboard loads/refreshes nodes (single source of truth). */
+    applyMeshNodes(nodes) {
+        if (!Array.isArray(nodes) || !nodes.length) return;
+        this._meshNodes = nodes;
+        const store = this._store();
+        if (store) store.syncMeshNodes(nodes);
+        if (this._rendered) {
+            this._roster?.render(this._meshNodes);
+            if (this._viewMode === 'map') this._ensureTopoMap();
+        }
+    }
+
     async refresh() {
         if (!this._container) return;
         this.bindStore(this._store());
@@ -113,11 +125,11 @@ class TopologyTab {
             const nodesData = await nodesRes.json();
             this._meshNodes = TopologyTab._parseNodesResponse(nodesData);
             const store = this._store();
-            if (store) {
+            if (store && this._meshNodes.length) {
                 store.syncMeshNodes(this._meshNodes);
             }
         } else {
-            console.warn('Topology tab: nodes API failed — keeping cached roster');
+            console.warn('Topology tab: nodes API failed —', nodesRes.status);
             if (!this._meshNodes.length && this._store()?.getMeshNodeList) {
                 this._meshNodes = this._store().getMeshNodeList();
             }

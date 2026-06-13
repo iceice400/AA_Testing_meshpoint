@@ -136,6 +136,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const knownNodeIds = new Set();
 
     const nodeMap = new NodeMap('map', { topology: false });
+    nodeMap.setStore(topologyStore);
     const packetFeed = new SimplePacketFeed('packet-tbody');
 
     const nodeDrawer = new NodeDrawer('node-drawer', {
@@ -190,6 +191,11 @@ document.addEventListener('DOMContentLoaded', async () => {
 
         topologyStore.ingestPacket(packet);
         window.topologyTab?.ingestPacket?.(packet);
+        if (['neighborinfo', 'traceroute', 'routing', 'position'].includes(
+            (packet.packet_type || '').toLowerCase(),
+        )) {
+            nodeMap.refreshTopologyOverlay?.();
+        }
 
         if (packet.packet_type === 'telemetry') {
             const batt = packet.decoded_payload?.battery_level
@@ -356,6 +362,17 @@ function _parseNodesResponse(data) {
     return [];
 }
 
+/** Keep topology tab and store in sync with dashboard node loads. */
+function _syncTopologyNodes(nodes) {
+    if (!Array.isArray(nodes) || !nodes.length) return;
+    if (window.topologyStore) {
+        window.topologyStore.syncMeshNodes(nodes);
+    }
+    if (window.topologyTab?.applyMeshNodes) {
+        window.topologyTab.applyMeshNodes(nodes);
+    }
+}
+
 async function _loadInitial(nodeMap, nodeList, packetFeed, topologyStore, knownNodeIds) {
     try {
         const [deviceRes, nodesRes, packetsRes] = await Promise.all([
@@ -364,17 +381,29 @@ async function _loadInitial(nodeMap, nodeList, packetFeed, topologyStore, knownN
             fetch('/api/packets?limit=50'),
         ]);
         const device = deviceRes.ok ? await deviceRes.json() : {};
-        const nodesData = nodesRes.ok ? await nodesRes.json() : null;
+        let nodesData = null;
+        if (nodesRes.ok) {
+            try {
+                nodesData = await nodesRes.json();
+            } catch (parseErr) {
+                console.warn('Nodes API returned invalid JSON:', parseErr);
+            }
+        }
         const packetsData = packetsRes.ok ? await packetsRes.json() : { packets: [] };
 
         _setText('sidebar-device-name', _resolveDeviceLabel(device));
 
         const nodes = nodesRes.ok ? _parseNodesResponse(nodesData) : [];
+        if (!nodesRes.ok) {
+            console.warn('Nodes API failed:', nodesRes.status);
+        } else if (!nodes.length && nodesData?.detail) {
+            console.warn('Nodes API error payload:', nodesData.detail);
+        }
         for (const n of nodes) {
             if (n.node_id) knownNodeIds.add(n.node_id);
         }
-        if (window.topologyStore && nodesRes.ok) {
-            topologyStore.syncMeshNodes(nodes);
+        if (window.topologyStore && nodesRes.ok && nodes.length) {
+            _syncTopologyNodes(nodes);
             await topologyStore.refreshFromApi();
         }
         nodeMap.loadNodes(nodes, device);
@@ -403,9 +432,12 @@ async function _refreshData(nodeMap, nodeList, packetFeed, topologyStore) {
         ]);
         const data = nodesRes.ok ? await nodesRes.json() : null;
         const nodes = nodesRes.ok ? _parseNodesResponse(data) : [];
+        if (!nodesRes.ok) {
+            console.warn('Nodes refresh failed:', nodesRes.status);
+        }
         const device = deviceRes.ok ? await deviceRes.json() : undefined;
-        if (window.topologyStore && nodesRes.ok) {
-            topologyStore.syncMeshNodes(nodes);
+        if (window.topologyStore && nodesRes.ok && nodes.length) {
+            _syncTopologyNodes(nodes);
             await topologyStore.refreshFromApi();
         }
         nodeMap.loadNodes(nodes, device);

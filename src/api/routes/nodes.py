@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import datetime, timedelta, timezone
 
 from fastapi import APIRouter, HTTPException
@@ -8,6 +9,8 @@ from src.analytics.network_mapper import NetworkMapper
 from src.storage.node_repository import NodeRepository
 from src.storage.packet_repository import PacketRepository
 from src.storage.telemetry_repository import TelemetryRepository
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/nodes", tags=["nodes"])
 
@@ -33,7 +36,12 @@ def init_routes(
 @router.get("")
 async def list_nodes(limit: int = 500, enrich: bool = True):
     if enrich:
-        return await _node_repo.get_all_with_signal(limit)
+        try:
+            return await _node_repo.get_all_with_signal(limit)
+        except Exception as exc:
+            logger.exception("Enriched nodes query failed; falling back to basic list")
+            nodes = await _node_repo.get_all(limit)
+            return [n.to_dict() for n in nodes]
     return [n.to_dict() for n in await _node_repo.get_all(limit)]
 
 
