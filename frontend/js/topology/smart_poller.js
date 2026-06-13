@@ -4,6 +4,12 @@
 (function () {
     const FIRMWARE_TR_LIMIT_MS = 30_000;
     const MIN_DEQUEUE_MS = 800;
+    const MT_NODE_ID_RE = /^[0-9a-f]{8}$/;
+
+    function isMeshtasticNodeId(id) {
+        const n = String(id || '').replace(/^!/, '').toLowerCase();
+        return MT_NODE_ID_RE.test(n);
+    }
 
     function haversineM(lat1, lon1, lat2, lon2) {
         const R = 6371000;
@@ -76,6 +82,7 @@
 
         enqueue(nodeId, reason = 'manual', priority = 5) {
             if (this._observer) return false;
+            if (!isMeshtasticNodeId(nodeId)) return false;
             if (this._queue.some((e) => e.nodeId === nodeId)) return false;
             this._queue.push({
                 nodeId,
@@ -93,6 +100,15 @@
 
         /** Immediate traceroute for operator ↯ button (bypasses queue). */
         async traceNode(nodeId, { force = true, reason = 'manual' } = {}) {
+            if (!isMeshtasticNodeId(nodeId)) {
+                this._onAlert({
+                    type: 'warn',
+                    node_id: nodeId,
+                    node_name: nodeId,
+                    message: 'Invalid node ID for Meshtastic traceroute (need 8 hex chars).',
+                });
+                return { success: false, error: 'invalid node id' };
+            }
             if (this._observer) {
                 this._onAlert({
                     type: 'warn',

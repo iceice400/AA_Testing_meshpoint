@@ -12,6 +12,11 @@ def normalize_node_id(node_id: str) -> str:
     return (node_id or "").strip().lower().lstrip("!")
 
 
+def is_valid_meshtastic_node_id(node_id: str) -> bool:
+    """True when *node_id* is a 32-bit Meshtastic hex id (8 chars, no ``!``)."""
+    return bool(_NODE_ID_RE.match(normalize_node_id(node_id)))
+
+
 def validate_node_ids(node_ids: list[str]) -> list[str]:
     """Return normalized unique node IDs or raise ValueError."""
     seen: set[str] = set()

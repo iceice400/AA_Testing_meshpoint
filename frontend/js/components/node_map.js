@@ -195,7 +195,8 @@ class NodeMap {
                 edge_count: u.edge_count || 0,
                 latest_rssi: u.latest_rssi,
             }));
-            this._renderDarkStubs(unplotted, payload.estimates || [], true);
+            const stubPool = this._mergeUnplottedEdgeEndpoints(unplotted, links);
+            this._renderDarkStubs(stubPool, payload.estimates || [], true);
 
             this._topologyLayer.clearLayers();
             this._edgeLines?.clear?.();
@@ -308,6 +309,27 @@ class NodeMap {
             this._map.setView(bounds[0], 13);
         }
         this._hasFitBounds = true;
+    }
+
+    _mergeUnplottedEdgeEndpoints(unplotted, edges) {
+        const byId = new Map(
+            (unplotted || []).map((u) => [_normNodeId(u.id), { ...u, id: _normNodeId(u.id) }]),
+        );
+        for (const edge of edges || []) {
+            for (const raw of [edge.nodeA, edge.nodeB, edge.source, edge.target]) {
+                const id = _normNodeId(raw);
+                if (!id || this._resolveLatLng(id)) continue;
+                if (!byId.has(id)) {
+                    byId.set(id, {
+                        id,
+                        label: `!${id.slice(-4)}`,
+                        edge_count: 1,
+                        latest_rssi: null,
+                    });
+                }
+            }
+        }
+        return [...byId.values()];
     }
 
     _buildMapChrome() {
@@ -466,7 +488,11 @@ class NodeMap {
         }
 
         this._ensureMarkersPlotted(this._store.getPlottedMeshNodes?.() || []);
-        this._renderDarkStubs(snap.unplotted, snap.estimates || [], showDark);
+        const stubPool = this._mergeUnplottedEdgeEndpoints(
+            snap.unplotted,
+            snap.edges || [],
+        );
+        this._renderDarkStubs(stubPool, snap.estimates || [], showDark);
         this._renderEdges(snap.edges, showEdges, mode);
         this._renderRoutePaths(snap.routes, showEdges && mode !== 'coverage');
         this._updateLabels(showLabels);

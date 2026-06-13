@@ -81,7 +81,11 @@
 
             const filtered = this._nodes.filter((n) => this._matchesFilters(n, now, inactMs, onlyActive));
 
-            if (badge) badge.textContent = `${this._nodes.length} nodes`;
+            if (badge) {
+                badge.textContent = filtered.length === this._nodes.length
+                    ? `${this._nodes.length} nodes`
+                    : `${filtered.length} / ${this._nodes.length} nodes`;
+            }
             list.innerHTML = '';
 
             if (!filtered.length) {
@@ -105,16 +109,30 @@
         _matchesFilters(n, now, inactMs, onlyActive) {
             const id = n.node_id || n.id;
             const role = this._roleKey(n.role);
-            const isDark = !n.latitude && !n.longitude;
+            const isDark = !this._hasGps(n);
             const lastHeard = n.last_heard || n.last_seen;
             const lastSeen = lastHeard ? new Date(lastHeard).getTime() : null;
             const inactive = lastSeen && (now - lastSeen) > inactMs;
 
             if (onlyActive && inactive) return false;
-            if (isDark && !this._filters.has('DARK')) return false;
-            if (!isDark && role === 'ROUTER' && !this._filters.has('ROUTER')) return false;
-            if (!isDark && role === 'REPEATER' && !this._filters.has('REPEATER')) return false;
-            if (!isDark && role === 'CLIENT' && !this._filters.has('CLIENT')) return false;
+
+            const roleFiltersOn = this._filters.has('ROUTER')
+                || this._filters.has('CLIENT')
+                || this._filters.has('REPEATER');
+
+            if (roleFiltersOn) {
+                if (isDark) {
+                    if (!this._filters.has('DARK')) return false;
+                } else if (role === 'ROUTER') {
+                    if (!this._filters.has('ROUTER')) return false;
+                } else if (role === 'REPEATER') {
+                    if (!this._filters.has('REPEATER')) return false;
+                } else if (!this._filters.has('CLIENT')) {
+                    return false;
+                }
+            } else if (isDark && !this._filters.has('DARK')) {
+                return false;
+            }
 
             if (this._search) {
                 const blob = [
@@ -125,12 +143,20 @@
             return true;
         }
 
+        _hasGps(n) {
+            const lat = n?.latitude;
+            const lon = n?.longitude;
+            if (lat == null || lon == null) return false;
+            if (lat === 0 && lon === 0) return false;
+            return true;
+        }
+
         _cardEl(n, now, inactMs) {
             const id = n.node_id || n.id;
             const lastHeard = n.last_heard || n.last_seen;
             const lastSeen = lastHeard ? new Date(lastHeard).getTime() : null;
             const inactive = lastSeen && (now - lastSeen) > inactMs;
-            const isDark = !n.latitude && !n.longitude;
+            const isDark = !this._hasGps(n);
             const isStatic = this._poller?.isStatic(id);
             const queued = this._poller?.isQueued(id);
             const hasTrace = !!this._poller?.getTraceMeta(id);

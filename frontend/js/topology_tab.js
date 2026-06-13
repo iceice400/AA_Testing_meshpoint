@@ -76,7 +76,7 @@ class TopologyTab {
     async _loadData() {
         const [topoRes, nodesRes, deviceRes, statusRes, configRes] = await Promise.all([
             fetch(`/api/analytics/topology?hours=${this._hours}`),
-            fetch('/api/nodes?enrich=true'),
+            fetch('/api/nodes?enrich=true&limit=2000'),
             fetch('/api/device'),
             fetch('/api/analytics/topology/status', { credentials: 'same-origin' }),
             fetch('/api/config', { credentials: 'same-origin' }),
@@ -89,12 +89,27 @@ class TopologyTab {
                 window.topologyStore.loadFromApi(this._graph);
             }
         }
-        const nodesData = nodesRes.ok ? await nodesRes.json() : { nodes: [] };
-        this._meshNodes = nodesData.nodes || nodesData || [];
-        this._device = deviceRes.ok ? await deviceRes.json() : null;
-        if (window.topologyStore) {
-            window.topologyStore.syncMeshNodes(this._meshNodes);
+        const nodesData = nodesRes.ok ? await nodesRes.json() : null;
+        const parsed = Array.isArray(nodesData)
+            ? nodesData
+            : (nodesData?.nodes || []);
+        if (nodesRes.ok && parsed.length) {
+            this._meshNodes = parsed;
+            if (window.topologyStore) {
+                window.topologyStore.syncMeshNodes(this._meshNodes);
+            }
+        } else if (nodesRes.ok) {
+            this._meshNodes = parsed;
+            if (window.topologyStore) {
+                window.topologyStore.syncMeshNodes(this._meshNodes);
+            }
+        } else {
+            console.warn('Topology tab: nodes API failed — keeping cached roster');
+            if (!this._meshNodes.length && window.topologyStore?.getMeshNodeList) {
+                this._meshNodes = window.topologyStore.getMeshNodeList();
+            }
         }
+        this._device = deviceRes.ok ? await deviceRes.json() : null;
         if (this._intel && this._device?.node_id) {
             this._intel.setDeviceId(this._device.node_id);
         }
@@ -114,7 +129,10 @@ class TopologyTab {
     }
 
     _renderAll() {
-        this._roster?.render(this._meshNodes);
+        const rosterNodes = this._meshNodes.length
+            ? this._meshNodes
+            : (window.topologyStore?.getMeshNodeList?.() || []);
+        this._roster?.render(rosterNodes);
         this._chBar?.refresh(this._hours);
         if (this._viewMode === 'map') {
             this._ensureTopoMap();

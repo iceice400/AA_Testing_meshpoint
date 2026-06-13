@@ -8,6 +8,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Callable, Optional
 
+from src.relay.node_id import is_valid_meshtastic_node_id, normalize_node_id
+
 logger = logging.getLogger(__name__)
 
 # Meshtastic 2.5.1+ minimum spacing between traceroute transmissions.
@@ -91,30 +93,41 @@ class TopologyPoller:
         if self._send is None:
             return {"success": False, "error": "TX unavailable", "node_id": node_id}
 
+        nid = normalize_node_id(node_id)
+        if not is_valid_meshtastic_node_id(nid):
+            return {
+                "success": False,
+                "node_id": node_id,
+                "error": (
+                    f"Invalid Meshtastic node ID {node_id!r} "
+                    "(expected 8 hex chars, not MeshCore pubkey)"
+                ),
+            }
+
         now = time.time()
-        last = self._last_poll.get(node_id, 0.0)
+        last = self._last_poll.get(nid, 0.0)
         min_spacing = FIRMWARE_TR_LIMIT_S
         if not force and (now - last) < min_spacing:
             return {
                 "success": False,
                 "skipped": True,
-                "node_id": node_id,
+                "node_id": nid,
                 "cooldown_remaining_s": round(min_spacing - (now - last)),
             }
 
         try:
-            result = await self._send(node_id)
+            result = await self._send(nid)
             ok = getattr(result, "success", False)
             if ok:
-                self._last_poll[node_id] = now
+                self._last_poll[nid] = now
             err = None if ok else getattr(result, "error", "send failed")
             return {
                 "success": ok,
-                "node_id": node_id,
+                "node_id": nid,
                 "error": err,
             }
         except Exception as exc:
-            return {"success": False, "node_id": node_id, "error": str(exc)}
+            return {"success": False, "node_id": nid, "error": str(exc)}
 
     async def poll_now(self, *, force: bool = False) -> dict[str, Any]:
         if self._send is None or self._list_targets is None:

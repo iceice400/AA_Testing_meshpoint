@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime, timezone
 from typing import Optional
@@ -78,20 +79,24 @@ class NodeRepository:
 
     async def get_all(self, limit: int = 500) -> list[Node]:
         rows = await self._db.fetch_all(
-            "SELECT * FROM nodes ORDER BY last_heard DESC LIMIT ?", (limit,)
+            "SELECT * FROM nodes ORDER BY last_heard DESC LIMIT ?",
+            (limit,),
         )
         return [self._row_to_node(r) for r in rows]
 
     async def get_count(self) -> int:
-        row = await self._db.fetch_one("SELECT COUNT(*) as cnt FROM nodes")
-        return row["cnt"] if row else 0
+        row = await self._db.fetch_one("SELECT COUNT(*) AS cnt FROM nodes")
+        return int(row["cnt"]) if row else 0
 
-    async def get_active_count(self, hours: int = 24) -> int:
-        cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).isoformat()
+    async def get_active_count(self, hours: float = 24) -> int:
+        since = (
+            datetime.now(timezone.utc) - timedelta(hours=hours)
+        ).isoformat()
         row = await self._db.fetch_one(
-            "SELECT COUNT(*) as cnt FROM nodes WHERE last_heard >= ?", (cutoff,)
+            "SELECT COUNT(*) AS cnt FROM nodes WHERE last_heard >= ?",
+            (since,),
         )
-        return row["cnt"] if row else 0
+        return int(row["cnt"]) if row else 0
 
     async def get_with_position(self) -> list[Node]:
         rows = await self._db.fetch_all(
@@ -128,24 +133,68 @@ class NodeRepository:
                        ROW_NUMBER() OVER (PARTITION BY node_id ORDER BY timestamp DESC) AS rn
                 FROM telemetry
             ) t ON t.node_id = n.node_id AND t.rn = 1
-            LEFT JOIN (
-                SELECT source_id,
-                       CAST(json_extract(decoded_payload, '$.latitude') AS REAL) AS pos_lat,
-                       CAST(json_extract(decoded_payload, '$.longitude') AS REAL) AS pos_lon,
-                       ROW_NUMBER() OVER (
-                           PARTITION BY source_id ORDER BY timestamp DESC
-                       ) AS pos_rn
-                FROM packets
-                WHERE packet_type = 'position'
-                  AND decoded_payload IS NOT NULL
-                  AND json_extract(decoded_payload, '$.latitude') IS NOT NULL
-            ) pos ON pos.source_id = n.node_id AND pos.pos_rn = 1
             ORDER BY n.last_heard DESC
             LIMIT ?
             """,
             (limit,),
         )
-        return [self._enrich_row(row) for row in rows]
+        result = [self._enrich_row(row) for row in rows]
+        await self._merge_latest_positions(result)
+        return result
+
+    async def _merge_latest_positions(self, nodes: list[dict]) -> None:
+        """Fill missing GPS from the latest position packet per node."""
+        missing = [n["node_id"] for n in nodes if n.get("latitude") is None]
+        if not missing:
+            return
+        pos_map = await self._latest_positions_for(missing)
+        for node in nodes:
+            nid = node.get("node_id")
+            if node.get("latitude") is not None or nid not in pos_map:
+                continue
+            lat, lon = pos_map[nid]
+            node["latitude"] = lat
+            node["longitude"] = lon
+            node["has_position"] = True
+
+    async def _latest_positions_for(
+        self, node_ids: list[str],
+    ) -> dict[str, tuple[float, float]]:
+        if not node_ids:
+            return {}
+        placeholders = ",".join("?" * len(node_ids))
+        rows = await self._db.fetch_all(
+            f"""
+            SELECT source_id, decoded_payload
+            FROM packets
+            WHERE packet_type = 'position'
+              AND source_id IN ({placeholders})
+              AND decoded_payload IS NOT NULL
+            ORDER BY timestamp DESC
+            """,
+            tuple(node_ids),
+        )
+        out: dict[str, tuple[float, float]] = {}
+        for row in rows:
+            sid = row["source_id"]
+            if sid in out:
+                continue
+            try:
+                payload = json.loads(row["decoded_payload"])
+            except (json.JSONDecodeError, TypeError):
+                continue
+            lat = payload.get("latitude")
+            lon = payload.get("longitude")
+            if lat is None or lon is None:
+                continue
+            try:
+                la, lo = float(lat), float(lon)
+            except (TypeError, ValueError):
+                continue
+            if la == 0.0 and lo == 0.0:
+                continue
+            out[sid] = (la, lo)
+        return out
 
     @staticmethod
     def _enrich_row(row: dict) -> dict:
@@ -163,14 +212,6 @@ class NodeRepository:
         hop_start = row.get("latest_hop_start", 0) or 0
         hop_limit = row.get("latest_hop_limit", 0) or 0
         d["latest_hops"] = max(0, hop_start - hop_limit)
-        if d.get("latitude") is None and row.get("pos_lat") is not None:
-            lat = float(row["pos_lat"])
-            lon = float(row["pos_lon"]) if row.get("pos_lon") is not None else None
-            if lat != 0.0 or (lon is not None and lon != 0.0):
-                d["latitude"] = lat
-                if lon is not None:
-                    d["longitude"] = lon
-                d["has_position"] = lon is not None
         return d
 
     async def increment_packet_count(self, node_id: str) -> None:
@@ -209,7 +250,9 @@ class NodeRepository:
             latitude=row.get("latitude"),
             longitude=row.get("longitude"),
             altitude=row.get("altitude"),
-            last_heard=datetime.fromisoformat(row["last_heard"]),
-            first_seen=datetime.fromisoformat(row["first_seen"]),
+            last_heard=datetime.fromisoformat(row["last_heard"])
+            if row.get("last_heard") else datetime.now(timezone.utc),
+            first_seen=datetime.fromisoformat(row["first_seen"])
+            if row.get("first_seen") else datetime.now(timezone.utc),
             packet_count=row.get("packet_count", 0),
         )

@@ -364,7 +364,7 @@ async function _loadInitial(nodeMap, nodeList, packetFeed, topologyStore, knownN
         for (const n of nodes) {
             if (n.node_id) knownNodeIds.add(n.node_id);
         }
-        if (window.topologyStore) {
+        if (window.topologyStore && nodes.length) {
             topologyStore.syncMeshNodes(nodes);
             await topologyStore.refreshFromApi();
         }
@@ -395,7 +395,7 @@ async function _refreshData(nodeMap, nodeList, packetFeed, topologyStore) {
         const data = await nodesRes.json();
         const nodes = data.nodes || data || [];
         const device = deviceRes.ok ? await deviceRes.json() : undefined;
-        if (window.topologyStore) {
+        if (window.topologyStore && nodes.length) {
             topologyStore.syncMeshNodes(nodes);
             await topologyStore.refreshFromApi();
         }

@@ -16,9 +16,9 @@ class TestTopologyPollerTraceNode(unittest.IsolatedAsyncioTestCase):
             poll_interval_minutes=15,
             send_traceroute=send,
         )
-        poller._last_poll["abc123"] = time.time() - 5
+        poller._last_poll["abc12345"] = time.time() - 5
 
-        result = await poller.trace_node("abc123", force=False)
+        result = await poller.trace_node("abc12345", force=False)
 
         self.assertTrue(result["skipped"])
         self.assertLessEqual(result["cooldown_remaining_s"], FIRMWARE_TR_LIMIT_S)
@@ -31,12 +31,12 @@ class TestTopologyPollerTraceNode(unittest.IsolatedAsyncioTestCase):
             poll_interval_minutes=15,
             send_traceroute=send,
         )
-        poller._last_poll["abc123"] = time.time()
+        poller._last_poll["abc12345"] = time.time()
 
-        result = await poller.trace_node("abc123", force=True)
+        result = await poller.trace_node("abc12345", force=True)
 
         self.assertTrue(result["success"])
-        send.assert_awaited_once_with("abc123")
+        send.assert_awaited_once_with("abc12345")
 
     async def test_trace_node_after_firmware_spacing_succeeds(self):
         send = AsyncMock(return_value=MagicMock(success=True))
@@ -45,12 +45,12 @@ class TestTopologyPollerTraceNode(unittest.IsolatedAsyncioTestCase):
             poll_interval_minutes=15,
             send_traceroute=send,
         )
-        poller._last_poll["abc123"] = time.time() - (FIRMWARE_TR_LIMIT_S + 1)
+        poller._last_poll["abc12345"] = time.time() - (FIRMWARE_TR_LIMIT_S + 1)
 
-        result = await poller.trace_node("abc123", force=False)
+        result = await poller.trace_node("abc12345", force=False)
 
         self.assertTrue(result["success"])
-        send.assert_awaited_once_with("abc123")
+        send.assert_awaited_once_with("abc12345")
 
 
 if __name__ == "__main__":

@@ -125,9 +125,17 @@
             return out;
         }
 
+        getMeshNodeList() {
+            return [...this._meshNodes.values()];
+        }
+
         /** Mesh nodes from GET /api/nodes — GPS, names, roles. */
-        syncMeshNodes(nodes) {
-            this._meshNodes.clear();
+        syncMeshNodes(nodes, { replace = true } = {}) {
+            if (!nodes?.length) {
+                if (replace) return;
+            } else if (replace) {
+                this._meshNodes.clear();
+            }
             for (const n of nodes || []) {
                 const id = normalizeNodeId(n.node_id || n.id);
                 if (!id) continue;
