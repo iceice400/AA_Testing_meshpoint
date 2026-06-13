@@ -334,6 +334,8 @@ Full option matrix: [Configuration > Location (GPS) source](docs/CONFIGURATION.m
 
 ### Field testing (AA_Testing fork)
 
+Full fork layout, branch map, and upstream PR split plan: **[docs/plans/AA_TESTING_FORK.md](docs/plans/AA_TESTING_FORK.md)**.
+
 To pull the latest integration branch from [iceice400/AA_Testing_meshpoint](https://github.com/iceice400/AA_Testing_meshpoint) on a Pi that already has Meshpoint installed:
 
 ```bash

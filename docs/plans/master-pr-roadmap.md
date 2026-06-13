@@ -1,5 +1,7 @@
 # Meshpoint — Master PR Roadmap (16 PRs)
 
+**Field fork (AA_Testing):** Integration branch `field/all-features` bundles in-flight PRs for Pi testing. Do not merge it wholesale — see [AA_TESTING_FORK.md](./AA_TESTING_FORK.md) for branch map and upstream slice plan.
+
 **Purpose:** Ordered pull-request queue across three feature-request batches. Submit **one at a time**; wait for merge or explicit feedback before opening the next.  
 **Workflow:** [CONTRIBUTING.md](../../CONTRIBUTING.md) — branch from current `upstream/main`, one focused PR per branch, squash-merge on `KMX415/meshpoint:main`.  
 **Risk tiers** (from CONTRIBUTING.md):

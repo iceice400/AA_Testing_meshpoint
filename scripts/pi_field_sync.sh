@@ -1,10 +1,16 @@
 #!/bin/bash
-# Sync /opt/meshpoint to origin/field/all-features for field testing.
+# Sync /opt/meshpoint to the AA_Testing field integration branch.
 # Run on the Pi: sudo bash scripts/pi_field_sync.sh
+#
+# Defaults: remote=origin, branch=field/all-features.
+# Override: MESHPOINT_REMOTE=aa_testing MESHPOINT_BRANCH=field/all-features
+# See docs/plans/AA_TESTING_FORK.md
 set -euo pipefail
 
 REPO="${MESHPOINT_DIR:-/opt/meshpoint}"
+REMOTE="${MESHPOINT_REMOTE:-origin}"
 BRANCH="${MESHPOINT_BRANCH:-field/all-features}"
+AA_TESTING_URL="${MESHPOINT_AA_TESTING_URL:-https://github.com/iceice400/AA_Testing_meshpoint.git}"
 
 if [ "$(id -u)" -ne 0 ]; then
     echo "Run as root: sudo bash $0" >&2
@@ -27,9 +33,18 @@ if [ -f "${REPO}/scripts/ensure_git_safe.sh" ]; then
     bash "${REPO}/scripts/ensure_git_safe.sh" "${REPO}"
 fi
 
-git -C "${REPO}" fetch origin
+ORIGIN_URL="$(git -C "${REPO}" remote get-url "${REMOTE}" 2>/dev/null || true)"
+if [ -z "${ORIGIN_URL}" ]; then
+    echo "Adding remote ${REMOTE} -> ${AA_TESTING_URL}" >&2
+    git -C "${REPO}" remote add "${REMOTE}" "${AA_TESTING_URL}"
+elif ! echo "${ORIGIN_URL}" | grep -q "AA_Testing_meshpoint"; then
+    echo "Warning: ${REMOTE} is ${ORIGIN_URL} (expected AA_Testing_meshpoint)." >&2
+    echo "  sudo git -C ${REPO} remote set-url ${REMOTE} ${AA_TESTING_URL}" >&2
+fi
+
+git -C "${REPO}" fetch "${REMOTE}"
 git -C "${REPO}" checkout -f "${BRANCH}"
-git -C "${REPO}" reset --hard "origin/${BRANCH}"
+git -C "${REPO}" reset --hard "${REMOTE}/${BRANCH}"
 git -C "${REPO}" clean -fd
 
 if [ -f /tmp/meshpoint-local.yaml.bak ]; then
@@ -41,4 +56,4 @@ bash "${REPO}/scripts/install.sh"
 
 systemctl start meshpoint
 systemctl --no-pager status meshpoint || true
-echo "Synced to $(git -C "${REPO}" rev-parse --short HEAD) on ${BRANCH}"
+echo "Synced to $(git -C "${REPO}" rev-parse --short HEAD) on ${REMOTE}/${BRANCH}"
