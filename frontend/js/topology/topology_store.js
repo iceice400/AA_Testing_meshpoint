@@ -378,10 +378,15 @@
         }
 
         getFilteredEdges() {
-            return this._filterEdges(this.mapMode || 'topology', this._selectedNodeId);
+            return this.getTopologyEdges();
         }
 
-        /** Map rendering — hop mode shows traceroute/routing edges; topology shows all. */
+        /** All edges for dashboard overlay, badges, and graph — never hop-filtered. */
+        getTopologyEdges() {
+            return this._filterEdges('topology', this._selectedNodeId);
+        }
+
+        /** Map rendering — hop mode shows traceroute/routing edges only. */
         getMapEdges(mode = this.mapMode || 'topology') {
             return this._filterEdges(mode, this._selectedNodeId);
         }
@@ -442,7 +447,7 @@
         }
 
         getSnapshot() {
-            const edges = this.getFilteredEdges();
+            const edges = this.getTopologyEdges();
             const mapEdges = this.getMapEdges();
             const nodes = [...this._nodes.values()];
             const mapped = this.getPlottedMeshNodes().length;

@@ -285,7 +285,7 @@ class NodeMap {
             }
 
             const drawn = this._drawTopologyLinks(links, unplotted, estimates, routes);
-            if (this._store) {
+            if (this._topologyEnabled && this._store) {
                 this._updateBadges(this._store.getSnapshot(), drawn);
             }
         } catch (e) {
@@ -294,9 +294,7 @@ class NodeMap {
     }
 
     _drawTopologyLinks(links, unplotted, estimates, routes) {
-        const stubPool = this._mergeUnplottedEdgeEndpoints(unplotted, links, routes);
-        this._renderDarkStubs(stubPool, estimates, true);
-
+        // Dashboard overlay: draw link lines only (dark stubs stay on Topology tab map).
         this._topologyLayer.clearLayers();
         if (this._edgeLines) this._edgeLines.clear();
 
@@ -1087,43 +1085,53 @@ class NodeMap {
     }
 
     _ensureBadgeRefs() {
-        if (!this._badgesEl) return;
-        if (!this._badgeNodesEl) {
-            this._badgeNodesEl = this._badgesEl.querySelector('.map-badge-nodes');
-            this._badgeLinksEl = this._badgesEl.querySelector('.map-badge-links');
-            this._badgeDarkEl = this._badgesEl.querySelector('.map-badge-dark');
-            this._badgeWarnEl = this._badgesEl.querySelector('.map-badge-warn');
-            this._badgeWarnTxtEl = this._badgesEl.querySelector('.map-badge-warn-txt');
+        if (!this._topologyEnabled) return;
+        if (!this._badgesEl || !document.body.contains(this._badgesEl)) {
+            this._badgesEl = this._mapWrap?.querySelector('.map-status-badges') || null;
         }
+        if (!this._badgesEl) return;
+        this._badgeNodesEl = this._badgesEl.querySelector('.map-badge-nodes');
+        this._badgeLinksEl = this._badgesEl.querySelector('.map-badge-links');
+        this._badgeDarkEl = this._badgesEl.querySelector('.map-badge-dark');
+        this._badgeWarnEl = this._badgesEl.querySelector('.map-badge-warn');
+        this._badgeWarnTxtEl = this._badgesEl.querySelector('.map-badge-warn-txt');
+    }
+
+    _plottedMarkerCount() {
+        let count = Object.keys(this._markers || {}).length;
+        if (this._markerGroup?.getLayers) {
+            count = Math.max(count, this._markerGroup.getLayers().length);
+        }
+        if (this._deviceMarker) count += 1;
+        return count;
     }
 
     _updateBadges(snap, drawnLinks = 0) {
+        if (!this._topologyEnabled) return;
         this._ensureBadgeRefs();
-        const markerCount = Object.keys(this._markers || {}).length;
+        const markerCount = this._plottedMarkerCount();
         const stubCount = this._darkStubMarkers?.size || 0;
-        const hasDevice = !!(this._deviceMarker || (this._lastDevice?.latitude && this._lastDevice?.longitude));
         const fromLastNodes = (this._lastNodes || []).filter(
             (n) => _isValidGps(n.latitude, n.longitude),
         ).length;
         const plotted = Math.max(
             markerCount + stubCount,
-            snap.mapped || 0,
+            snap?.mapped || 0,
             fromLastNodes,
-            markerCount + (hasDevice ? 1 : 0),
         );
         const hopSegments = [...(this._hopSegmentLines?.values() || [])]
             .reduce((sum, lines) => sum + lines.length, 0);
-        const graphLinks = snap.map_edges?.length || snap.edges?.length || 0;
-        const routeCount = snap.routes?.length || 0;
+        const graphLinks = snap?.edges?.length || 0;
+        const mapLinks = snap?.map_edges?.length || graphLinks;
         const edgeLineCount = this._edgeLines?.size || 0;
         const linkCount = Math.max(
             drawnLinks,
             edgeLineCount,
             hopSegments,
             graphLinks,
-            routeCount > 0 ? Math.max(graphLinks, hopSegments) : 0,
+            mapLinks,
         );
-        const darkFromStore = snap.dark ?? snap.unplotted?.length ?? 0;
+        const darkFromStore = snap?.dark ?? snap?.unplotted?.length ?? 0;
         const darkCount = Math.max(stubCount, darkFromStore);
 
         if (this._badgeNodesEl) this._badgeNodesEl.textContent = String(plotted);

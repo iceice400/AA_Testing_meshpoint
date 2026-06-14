@@ -278,12 +278,24 @@ class TopologyTab {
         this.bindStore(this._store());
 
         document.addEventListener('sidebar:routeActivated', (event) => {
-            if (event.detail?.route !== 'topology') return;
-            if (this._liveRefreshTimer) clearInterval(this._liveRefreshTimer);
-            this._liveRefreshTimer = setInterval(() => this.refresh(), 60_000);
-            setTimeout(() => {
-                if (this._viewMode === 'map') this._ensureTopoMap();
-            }, 100);
+            const route = event.detail?.route;
+            if (route === 'topology') {
+                if (this._liveRefreshTimer) clearInterval(this._liveRefreshTimer);
+                this._liveRefreshTimer = setInterval(() => this.refresh(), 60_000);
+                setTimeout(() => {
+                    if (this._viewMode === 'map') this._ensureTopoMap();
+                }, 100);
+                return;
+            }
+            const store = this._store();
+            if (store && store.mapMode !== 'topology') {
+                store.mapMode = 'topology';
+                store.notifyChange();
+            }
+            if (this._liveRefreshTimer) {
+                clearInterval(this._liveRefreshTimer);
+                this._liveRefreshTimer = null;
+            }
         });
 
         window.addEventListener('resize', () => {
@@ -444,9 +456,6 @@ class TopologyTab {
         this._topoMap.setLocalNodeId(this._localMeshNodeId);
         this._topoMap.setProtocolFilter(this._settings.get('protocolFilter') || 'all');
         this._topoMap.loadNodes(this._filterByProtocol(this._meshNodes), this._device);
-        if (this._roster?._filters) {
-            this._topoMap.setRosterRoleFilters(this._roster._filters);
-        }
         this._topoMap.renderTopology();
         const refit = () => {
             this._topoMap?._map?.invalidateSize();

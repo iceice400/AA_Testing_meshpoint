@@ -6,8 +6,6 @@
         { id: 'ROUTER', label: 'Router' },
         { id: 'CLIENT', label: 'Client' },
         { id: 'REPEATER', label: 'Relay' },
-        { id: 'TRACKER', label: 'Tracker' },
-        { id: 'SENSOR', label: 'Sensor' },
         { id: 'DARK', label: 'Dark', warn: true },
         { id: 'ACTIVE', label: 'Active' },
     ];
@@ -204,22 +202,27 @@
 
             if (onlyActive && inactive) return false;
 
-            const roleFilters = ['ROUTER', 'CLIENT', 'REPEATER', 'TRACKER', 'SENSOR'];
-            const anyRoleOn = roleFilters.some((r) => this._filters.has(r));
-            const darkOn = this._filters.has('DARK');
-            const darkOnly = darkOn && !anyRoleOn;
+            const roleFiltersOn = this._filters.has('ROUTER')
+                || this._filters.has('CLIENT')
+                || this._filters.has('REPEATER');
+            const darkOnly = this._filters.has('DARK') && !roleFiltersOn;
 
             if (darkOnly) {
                 if (!isDark) return false;
-            } else if (isDark) {
-                if (!darkOn) return false;
-            } else if (anyRoleOn) {
-                if (role === 'ROUTER' && !this._filters.has('ROUTER')) return false;
-                if (role === 'REPEATER' && !this._filters.has('REPEATER')) return false;
-                if (role === 'TRACKER' && !this._filters.has('TRACKER')) return false;
-                if (role === 'SENSOR' && !this._filters.has('SENSOR')) return false;
-                if (role === 'CLIENT' && !this._filters.has('CLIENT')) return false;
-                if (!roleFilters.includes(role) && !this._filters.has('CLIENT')) return false;
+            } else if (roleFiltersOn) {
+                if (isDark) {
+                    if (!this._filters.has('DARK')) return false;
+                } else if (role === 'ROUTER') {
+                    if (!this._filters.has('ROUTER')) return false;
+                } else if (role === 'REPEATER') {
+                    if (!this._filters.has('REPEATER')) return false;
+                } else if (role === 'TRACKER' || role === 'SENSOR') {
+                    if (!this._filters.has('CLIENT')) return false;
+                } else if (!this._filters.has('CLIENT')) {
+                    return false;
+                }
+            } else if (isDark && !this._filters.has('DARK')) {
+                return false;
             }
 
             if (this._search) {
