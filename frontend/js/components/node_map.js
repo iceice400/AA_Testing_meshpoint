@@ -42,6 +42,7 @@ class NodeMap {
         this._settings = options.settings || null;
         this._protocolFilter = options.settings?.get('protocolFilter') || 'all';
         this._rosterRoleFilters = null;
+        this._localMapMode = 'topology';
         this._darkOrbitLayer = null;
         this._initialized = false;
         this._hasFitBounds = false;
@@ -286,7 +287,7 @@ class NodeMap {
 
             const drawn = this._drawTopologyLinks(links, unplotted, estimates, routes);
             if (this._topologyEnabled && this._store) {
-                this._updateBadges(this._store.getSnapshot(), drawn);
+                this._updateBadges(this._store.getSnapshot(), drawn, 'topology');
             }
         } catch (e) {
             console.error('Topology redraw failed:', e);
@@ -331,33 +332,7 @@ class NodeMap {
             this._topologyLayer.addLayer(line);
         }
 
-        const routeDrawn = this._drawRoutePathsOverlay(routes);
-        this._updateTopologyHint(links.length, drawn + routeDrawn);
-        return drawn + routeDrawn;
-    }
-
-    _drawRoutePathsOverlay(routes) {
-        if (!routes?.length) return 0;
-        let drawn = 0;
-        for (const route of routes.slice(0, 12)) {
-            const path = route.route || [];
-            const snrTowards = route.snr_towards || [];
-            for (let i = 0; i < path.length - 1; i += 1) {
-                const a = this._resolveLatLng(path[i]);
-                const b = this._resolveLatLng(path[i + 1]);
-                if (!a || !b) continue;
-                drawn += 1;
-                const snr = snrTowards[i];
-                const color = this._snrHopColor(snr);
-                const line = L.polyline([a, b], {
-                    color,
-                    weight: 4,
-                    opacity: 0.92,
-                    lineCap: 'round',
-                });
-                line.addTo(this._topologyLayer);
-            }
-        }
+        this._updateTopologyHint(links.length, drawn);
         return drawn;
     }
 
@@ -595,23 +570,7 @@ class NodeMap {
 
         this._modeBarEl.querySelectorAll('[data-mode]').forEach((btn) => {
             btn.addEventListener('click', () => {
-                const mode = btn.dataset.mode;
-                this._modeBarEl.querySelectorAll('[data-mode]').forEach((b) => {
-                    b.classList.toggle('map-mode-btn--active', b === btn);
-                });
-                if (this._store) {
-                    this._store.mapMode = mode;
-                    this._store.layers.edges = true;
-                    if (mode === 'coverage') {
-                        this._store.layers.coverage = true;
-                        this._setCoverageVisible(true);
-                    } else if (this._coverageVisible) {
-                        this._store.layers.coverage = false;
-                        this._setCoverageVisible(false);
-                    }
-                    this._store.notifyChange();
-                }
-                this.renderTopology();
+                this.setMapMode(btn.dataset.mode || 'topology');
             });
         });
 
@@ -620,6 +579,7 @@ class NodeMap {
             this._statusStrip = new window.StatusStrip(stripHost, 'TOPO');
             this._statusStrip.mount();
         }
+        this._syncModeBarUI();
     }
 
     _cssToken(name, fallback) {
@@ -713,7 +673,65 @@ class NodeMap {
 
         if (this._topologyEnabled && this._store) {
             const snap = this._store.getSnapshot();
-            this._updateBadges(snap, (this._edgeLines?.size || 0) + (this._routeLines?.length || 0));
+            this._updateBadges(
+                snap,
+                (this._edgeLines?.size || 0) + (this._routeLines?.length || 0),
+                this._localMapMode,
+            );
+        }
+    }
+
+    setMapMode(mode) {
+        const next = mode || 'topology';
+        if (this._localMapMode === next) return;
+        this._localMapMode = next;
+        this._syncModeBarUI();
+        if (this._store) {
+            this._store.layers.edges = true;
+            if (next === 'coverage') {
+                this._store.layers.coverage = true;
+                this._setCoverageVisible(true);
+            } else if (this._coverageVisible) {
+                this._store.layers.coverage = false;
+                this._setCoverageVisible(false);
+            }
+        }
+        if (next !== 'hop') {
+            this._clearRoutePaths();
+        }
+        this.renderTopology();
+    }
+
+    resetMapMode() {
+        this._localMapMode = 'topology';
+        this._syncModeBarUI();
+        this._clearRoutePaths();
+        if (this._topologyEnabled) {
+            this.renderTopology();
+        }
+    }
+
+    _syncModeBarUI() {
+        if (!this._modeBarEl) return;
+        const mode = this._localMapMode || 'topology';
+        this._modeBarEl.querySelectorAll('[data-mode]').forEach((btn) => {
+            btn.classList.toggle(
+                'map-mode-btn--active',
+                (btn.dataset.mode || 'topology') === mode,
+            );
+        });
+    }
+
+    _clearRoutePaths() {
+        if (this._routeLayer) this._routeLayer.clearLayers();
+        this._routeLines = [];
+        if (this._hopSegmentLines) {
+            for (const lines of this._hopSegmentLines.values()) {
+                for (const line of lines) {
+                    this._routeLayer?.removeLayer(line);
+                }
+            }
+            this._hopSegmentLines.clear();
         }
     }
 
@@ -721,9 +739,9 @@ class NodeMap {
         if (!this._topologyEnabled || !this._initialized || !this._store) return;
 
         const snap = this._store.getSnapshot();
-        const mode = this._store.mapMode || 'topology';
+        const mode = this._localMapMode || 'topology';
         const hopMode = mode === 'hop';
-        const mapEdges = snap.map_edges || snap.edges || [];
+        const mapEdges = this._store.getMapEdges(mode);
         const showEdges = this._store.layers.edges !== false;
         const showDark = this._store.layers.darkStubs !== false || this._darkFilterActive();
         const showLabels = this._store.layers.labels !== false;
@@ -736,7 +754,7 @@ class NodeMap {
         const stubPool = this._mergeUnplottedEdgeEndpoints(
             snap.unplotted,
             mapEdges,
-            snap.routes || [],
+            hopMode ? (snap.routes || []) : [],
         );
         this._renderDarkStubs(
             stubPool,
@@ -745,13 +763,11 @@ class NodeMap {
             this._darkFilterActive(),
         );
         const drawnLinks = this._renderEdges(mapEdges, showEdges, mode);
-        const drawnRoutes = this._renderRoutePaths(
-            snap.routes,
-            showEdges && mode !== 'coverage',
-            hopMode,
-        );
+        const drawnRoutes = hopMode && showEdges
+            ? this._renderRoutePaths(snap.routes, true, true)
+            : (this._clearRoutePaths(), 0);
         this._updateLabels(showLabels);
-        this._updateBadges(snap, drawnLinks + drawnRoutes);
+        this._updateBadges(snap, drawnLinks + drawnRoutes, mode);
         this._updateStatusStrip(snap);
     }
 
@@ -1106,35 +1122,50 @@ class NodeMap {
         return count;
     }
 
-    _updateBadges(snap, drawnLinks = 0) {
+    _countGpsNodes(nodes) {
+        return (nodes || []).filter(
+            (n) => _isValidGps(n.latitude ?? n.lat, n.longitude ?? n.lng),
+        ).length;
+    }
+
+    _updateBadges(snap, drawnLinks = 0, mode = 'topology') {
         if (!this._topologyEnabled) return;
         this._ensureBadgeRefs();
+        if (!this._badgeNodesEl && this._mapWrap && !this._mapWrap.querySelector('.map-status-badges')) {
+            this._buildMapChrome();
+            this._ensureBadgeRefs();
+        }
+        if (!this._badgeNodesEl) return;
+
         const markerCount = this._plottedMarkerCount();
         const stubCount = this._darkStubMarkers?.size || 0;
-        const fromLastNodes = (this._lastNodes || []).filter(
-            (n) => _isValidGps(n.latitude, n.longitude),
-        ).length;
+        const fromLastNodes = this._countGpsNodes(this._lastNodes);
         const plotted = Math.max(
-            markerCount + stubCount,
+            markerCount,
+            stubCount + markerCount,
             snap?.mapped || 0,
             fromLastNodes,
         );
-        const hopSegments = [...(this._hopSegmentLines?.values() || [])]
-            .reduce((sum, lines) => sum + lines.length, 0);
+        const hopSegments = mode === 'hop'
+            ? [...(this._hopSegmentLines?.values() || [])]
+                .reduce((sum, lines) => sum + lines.length, 0)
+            : 0;
         const graphLinks = snap?.edges?.length || 0;
-        const mapLinks = snap?.map_edges?.length || graphLinks;
+        const modeLinks = mode === 'hop'
+            ? (this._store?.getMapEdges('hop')?.length || 0)
+            : graphLinks;
         const edgeLineCount = this._edgeLines?.size || 0;
         const linkCount = Math.max(
             drawnLinks,
             edgeLineCount,
             hopSegments,
+            modeLinks,
             graphLinks,
-            mapLinks,
         );
         const darkFromStore = snap?.dark ?? snap?.unplotted?.length ?? 0;
         const darkCount = Math.max(stubCount, darkFromStore);
 
-        if (this._badgeNodesEl) this._badgeNodesEl.textContent = String(plotted);
+        this._badgeNodesEl.textContent = String(plotted);
         if (this._badgeLinksEl) this._badgeLinksEl.textContent = String(linkCount);
         if (this._badgeDarkEl) this._badgeDarkEl.textContent = String(darkCount);
 
@@ -1329,8 +1360,12 @@ class NodeMap {
         });
 
         document.addEventListener('sidebar:routeActivated', (event) => {
-            if (event.detail && event.detail.route === 'dashboard') {
+            const route = event.detail?.route;
+            if (route === 'dashboard') {
                 requestAnimationFrame(recalc);
+                if (!this._topologyEnabled && this._topologyVisible) {
+                    this._redrawTopologyOverlayFromStore();
+                }
             }
         });
 

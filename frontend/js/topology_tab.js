@@ -283,15 +283,14 @@ class TopologyTab {
                 if (this._liveRefreshTimer) clearInterval(this._liveRefreshTimer);
                 this._liveRefreshTimer = setInterval(() => this.refresh(), 60_000);
                 setTimeout(() => {
-                    if (this._viewMode === 'map') this._ensureTopoMap();
+                    if (this._viewMode === 'map') {
+                        this._ensureTopoMap();
+                        this._topoMap?.renderTopology();
+                    }
                 }, 100);
                 return;
             }
-            const store = this._store();
-            if (store && store.mapMode !== 'topology') {
-                store.mapMode = 'topology';
-                store.notifyChange();
-            }
+            this._topoMap?.resetMapMode?.();
             if (this._liveRefreshTimer) {
                 clearInterval(this._liveRefreshTimer);
                 this._liveRefreshTimer = null;
