@@ -200,6 +200,13 @@
             return this._traceMeta.get(nodeId) || null;
         }
 
+        getTraceHistory(limit = 12) {
+            return [...this._traceMeta.entries()]
+                .map(([nodeId, meta]) => ({ nodeId, ...meta }))
+                .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))
+                .slice(0, limit);
+        }
+
         _trackMovement(nodeId, lat, lng, now) {
             const hist = this._positionHistory.get(nodeId) || [];
             hist.push({ lat, lng, ts: now });

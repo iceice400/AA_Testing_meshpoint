@@ -41,7 +41,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     const router = new Router({
         defaultRoute: 'dashboard',
         allowedRoutes: [
-            'dashboard', 'stats', 'packets', 'topology', 'messages', 'radio', 'rf', 'unknown-rf', 'terminal',
+            'dashboard', 'stats', 'intelligence', 'packets', 'topology', 'messages', 'radio', 'rf', 'unknown-rf', 'terminal',
             'configuration/identity', 'configuration/radio',
             'configuration/channels', 'configuration/transmit',
             'configuration/mqtt',
@@ -132,6 +132,9 @@ document.addEventListener('DOMContentLoaded', async () => {
     window.topologyStore = topologyStore;
     if (window.topologyTab) {
         window.topologyTab.bindStore(topologyStore);
+    }
+    if (window.meshIntelligenceTab) {
+        window.meshIntelligenceTab.bindStore(topologyStore);
     }
     const knownNodeIds = new Set();
 
@@ -616,7 +619,7 @@ function _bootCommandPaletteAndKeymap(router) {
     const routeCommands = [
         ['dashboard', 'Go to Dashboard', 'Pages'],
         ['stats', 'Go to Stats', 'Pages'],
-        ['packets', 'Go to Packets', 'Pages'],
+        ['intelligence', 'Go to Mesh Intelligence', 'Pages'],
         ['topology', 'Go to Topology', 'Pages'],
         ['messages', 'Go to Messages', 'Pages'],
         ['radio', 'Go to Radio', 'Pages'],

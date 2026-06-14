@@ -1,5 +1,6 @@
 /**
- * Right intel panel — Smart poller, trace path, settings, legend, alerts.
+ * Mesh Intelligence side panel — Smart poller, trace path, poller settings, alerts.
+ * Map layers and legend live on the Topology tab (MeshSense-style).
  */
 (function () {
     class TopologyIntel {
@@ -61,6 +62,15 @@
                     </section>
 
                     <section class="topo-rp__sec">
+                        <div class="topo-rp__title-row">
+                            <span class="topo-sec-lbl">Recent traceroutes</span>
+                        </div>
+                        <div class="topo-trace-history" id="topo-trace-history">
+                            <div class="topo-af-empty">No traceroutes yet.</div>
+                        </div>
+                    </section>
+
+                    <section class="topo-rp__sec">
                         <div class="topo-rp__title-row"><span class="topo-sec-lbl">Poller settings</span></div>
                         <div class="topo-setting-row">
                             <label><input type="checkbox" id="topo-auto-on"
@@ -86,28 +96,6 @@
                             <label><input type="checkbox" id="topo-audio-on"
                                 ${this._settings.get('audioOn') ? 'checked' : ''} /> Audio alerts</label>
                         </div>
-                        <div class="topo-setting-row">
-                            <label><input type="checkbox" id="topo-edges-on"
-                                ${this._settings.get('edgesOn') !== false ? 'checked' : ''} /> Show edges</label>
-                        </div>
-                        <div class="topo-setting-row">
-                            <label><input type="checkbox" id="topo-dark-inf"
-                                ${this._settings.get('darkInfOn') !== false ? 'checked' : ''} /> Dark node inference</label>
-                        </div>
-                        <div class="topo-setting-row">
-                            <label><input type="checkbox" id="topo-labels-on"
-                                ${this._settings.get('labelsOn') !== false ? 'checked' : ''} /> Node labels</label>
-                        </div>
-                        <div class="topo-setting-row">
-                            <span>Time window</span>
-                            <select id="topo-hours" class="topo-hours-select">
-                                <option value="1">1h</option>
-                                <option value="6">6h</option>
-                                <option value="24" selected>24h</option>
-                                <option value="72">3d</option>
-                                <option value="168">7d</option>
-                            </select>
-                        </div>
                         <div class="topo-relay-prefix">
                             <span class="topo-sec-lbl">Relay prefix</span>
                             <input type="text" id="topo-relay-prefix" maxlength="16"
@@ -116,23 +104,7 @@
                         </div>
                         <div class="topo-btn-row">
                             <button type="button" class="topo-btn topo-btn--sm" id="topo-export">↓ Export</button>
-                            <button type="button" class="topo-btn topo-btn--sm" id="topo-open-graph">◎ Graph</button>
                             <button type="button" class="topo-btn topo-btn--sm" id="topo-refresh">↻ Refresh</button>
-                        </div>
-                    </section>
-
-                    <section class="topo-rp__sec">
-                        <div class="topo-rp__title-row"><span class="topo-sec-lbl">Legend</span></div>
-                        <div class="topo-legend-rows">
-                            <div class="topo-leg"><span class="topo-leg-line topo-leg-line--good"></span>Strong (RSSI &gt; -90)</div>
-                            <div class="topo-leg"><span class="topo-leg-line topo-leg-line--mid"></span>Marginal (-90 to -110)</div>
-                            <div class="topo-leg"><span class="topo-leg-line topo-leg-line--bad"></span>Weak (RSSI &lt; -110)</div>
-                            <div class="topo-leg"><span class="topo-leg-line topo-leg-line--dark"></span>Inferred dark link</div>
-                            <div class="topo-leg"><span class="topo-leg-dot topo-leg-dot--mt"></span>Meshtastic (MT) — circle</div>
-                            <div class="topo-leg"><span class="topo-leg-dot topo-leg-dot--mc"></span>MeshCore (MC) — diamond</div>
-                            <div class="topo-leg"><span class="topo-leg-dot topo-leg-dot--router"></span>Router / repeater</div>
-                            <div class="topo-leg"><span class="topo-leg-dot topo-leg-dot--client"></span>Client</div>
-                            <div class="topo-leg"><span class="topo-leg-dot topo-leg-dot--dark"></span>Dark / GPS-off node</div>
                         </div>
                     </section>
 
@@ -148,10 +120,8 @@
                 </div>
             `;
 
-            const hoursSel = document.getElementById('topo-hours');
-            if (hoursSel) hoursSel.value = String(this._settings.get('hours') || 24);
-
             this._bindSettings();
+            this._renderTraceHistory();
         }
 
         _bindSettings() {
@@ -164,9 +134,6 @@
             };
             bind('topo-auto-on', 'autoOn');
             bind('topo-audio-on', 'audioOn');
-            bind('topo-edges-on', 'edgesOn');
-            bind('topo-dark-inf', 'darkInfOn');
-            bind('topo-labels-on', 'labelsOn');
             document.getElementById('topo-rate-min')?.addEventListener('change', (e) => {
                 this._settings.set('rateLimitMin', Number(e.target.value) || 15);
             });
@@ -180,17 +147,12 @@
             document.getElementById('topo-relay-prefix')?.addEventListener('change', (e) => {
                 this._settings.set('relayPrefix', e.target.value || '[MP]');
             });
-            document.getElementById('topo-hours')?.addEventListener('change', (e) => {
-                this._settings.set('hours', Number(e.target.value) || 24);
-                this._emitAction('hoursChanged');
-            });
             document.getElementById('topo-poll-all')?.addEventListener('click', () => this._emitAction('pollAll'));
             document.getElementById('topo-poll-routers')?.addEventListener('click', () => this._emitAction('pollRouters'));
             document.getElementById('topo-clear-queue')?.addEventListener('click', () => {
                 this._poller?.clearQueue();
             });
             document.getElementById('topo-export')?.addEventListener('click', () => this._emitAction('export'));
-            document.getElementById('topo-open-graph')?.addEventListener('click', () => this._emitAction('graph'));
             document.getElementById('topo-refresh')?.addEventListener('click', () => this._emitAction('refresh'));
             document.getElementById('topo-trace-clear')?.addEventListener('click', () => {
                 this._traceVisible = false;
@@ -208,7 +170,9 @@
         }
 
         setOnAction(fn) { this._onAction = fn; }
-        _emitAction(name) { if (this._onAction) this._onAction(name); }
+        _emitAction(name, detail) {
+            if (this._onAction) this._onAction(name, detail);
+        }
 
         setDeviceId(id) { this._deviceId = id; }
 
@@ -228,6 +192,7 @@
         setSelectedNode(node) {
             this._selectedNode = node;
             this._renderTraceView();
+            this._renderTraceHistory();
         }
 
         updateQueueStatus(queue, state) {
@@ -261,6 +226,7 @@
                 `;
                 list.appendChild(row);
             }
+            this._renderTraceHistory();
         }
 
         pushAlert(alert) {
@@ -275,6 +241,7 @@
             if (this._alerts.length > this._maxAlerts) this._alerts.pop();
             this._renderAlerts();
             this._playAlertSound(entry.type);
+            if (String(entry.type).includes('route')) this._renderTraceHistory();
         }
 
         _playAlertSound(type) {
@@ -305,6 +272,31 @@
                     ${this._esc(a.message)}
                 `;
                 host.appendChild(card);
+            }
+        }
+
+        _renderTraceHistory() {
+            const host = document.getElementById('topo-trace-history');
+            if (!host || !this._poller?.getTraceHistory) return;
+            const items = this._poller.getTraceHistory(10);
+            if (!items.length) {
+                host.innerHTML = '<div class="topo-af-empty">No traceroutes yet.</div>';
+                return;
+            }
+            host.innerHTML = '';
+            for (const item of items) {
+                const row = document.createElement('button');
+                row.type = 'button';
+                row.className = 'topo-trace-history__row';
+                const hops = item.hopCount ?? (
+                    item.route?.length ? Math.max(0, item.route.length - 1) : '?'
+                );
+                row.innerHTML = `
+                    <span class="topo-trace-history__node">!${this._esc(String(item.nodeId).slice(-4))}</span>
+                    <span class="topo-trace-history__meta">${hops} hop(s) · ${this._ago(item.updatedAt)}</span>
+                `;
+                row.addEventListener('click', () => this._emitAction('traceHistory', item.nodeId));
+                host.appendChild(row);
             }
         }
 

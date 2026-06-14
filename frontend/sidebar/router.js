@@ -25,6 +25,7 @@ class Router {
     constructor(options = {}) {
         this._defaultRoute = options.defaultRoute || 'dashboard';
         this._allowedRoutes = new Set(options.allowedRoutes || []);
+        this._routeAliases = options.routeAliases || { packets: 'intelligence' };
         this._listeners = new Set();
         this._currentRoute = null;
         this._onHashChange = this._onHashChange.bind(this);
@@ -71,10 +72,11 @@ class Router {
     _readRouteFromHash() {
         const raw = location.hash.replace(/^#\/?/, '').trim();
         if (!raw) return this._defaultRoute;
-        if (this._allowedRoutes.size && !this._allowedRoutes.has(raw)) {
+        const route = this._routeAliases[raw] || raw;
+        if (this._allowedRoutes.size && !this._allowedRoutes.has(route)) {
             return this._defaultRoute;
         }
-        return raw;
+        return route;
     }
 
     _dispatch(route) {

@@ -1,0 +1,130 @@
+/* Mesh Intelligence tab — Malla-inspired layout */
+
+.section[data-section="intelligence"] {
+    overflow: hidden;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+}
+
+#intelligence-panel {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+}
+
+.intel-workspace {
+    --intel-sidebar-w: 300px;
+    --intel-chbar-h: 38px;
+    display: grid;
+    grid-template-columns: var(--intel-sidebar-w) 1fr;
+    grid-template-rows: 1fr var(--intel-chbar-h);
+    grid-template-areas:
+        "sidebar main"
+        "chbar chbar";
+    flex: 1;
+    min-height: 0;
+    height: 100%;
+    background: var(--bg-primary);
+}
+
+.intel-sidebar {
+    grid-area: sidebar;
+    min-height: 0;
+    overflow: hidden;
+    background: var(--bg-secondary);
+    border-right: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+}
+
+.intel-main {
+    grid-area: main;
+    min-height: 0;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+}
+
+.intel-main__header {
+    flex-shrink: 0;
+    padding: 0.5rem 0.75rem 0.35rem;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-secondary);
+}
+
+.intel-main__title {
+    margin: 0;
+    font-family: var(--font-mono);
+    font-size: 0.72rem;
+    font-weight: 600;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--text-primary);
+}
+
+.intel-main__subtitle {
+    margin: 0.15rem 0 0;
+    font-size: 0.68rem;
+    color: var(--text-muted);
+}
+
+.intel-packets-host {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+.intel-packets-host #packets-panel {
+    flex: 1;
+    min-height: 0;
+}
+
+.intel-chbar-host {
+    grid-area: chbar;
+    min-height: 0;
+    border-top: 1px solid var(--border);
+    background: var(--bg-secondary);
+}
+
+.topo-map-controls-hint {
+    padding-bottom: 0.75rem;
+}
+
+.topo-map-controls-hint__text {
+    margin: 0;
+    font-size: 0.65rem;
+    line-height: 1.45;
+    color: var(--text-muted);
+}
+
+.topo-map-controls-hint__link {
+    color: var(--accent-blue);
+    text-decoration: none;
+}
+
+.topo-map-controls-hint__link:hover {
+    text-decoration: underline;
+}
+
+@media (max-width: 900px) {
+    .intel-workspace {
+        grid-template-columns: 1fr;
+        grid-template-rows: auto 1fr var(--intel-chbar-h);
+        grid-template-areas:
+            "sidebar"
+            "main"
+            "chbar";
+    }
+
+    .intel-sidebar {
+        max-height: 280px;
+        border-right: none;
+        border-bottom: 1px solid var(--border);
+    }
+}

@@ -1,15 +1,15 @@
 /**
- * Topology tab — MeshSense-inspired three-panel operator workspace.
+ * Topology tab — MeshSense-inspired map workspace.
  *
- * [NODE ROSTER] | [MAP / GRAPH] | [SMART POLLER + INTEL]
- * [CHANNEL UTILIZATION BAR — full width bottom]
+ * [NODE ROSTER] | [MAP / GRAPH] | [MAP CONTROLS]
+ * Poller, packet browser, and channel utilization live on Mesh Intelligence.
  */
 class TopologyTab {
     constructor(containerId) {
         this._container = document.getElementById(containerId);
         this._rendered = false;
         this._viewMode = 'map';
-        this._observer = this._detectObserver();
+        this._observer = window.meshServices?.detectObserver?.() ?? this._detectObserver();
         this._meshNodes = [];
         this._device = null;
         this._selectedNode = null;
@@ -18,20 +18,12 @@ class TopologyTab {
         this._fetchedAt = null;
         this._loading = false;
 
-        this._settings = new TopologySettings();
+        const svc = window.meshServices;
+        this._settings = svc?.settings || new TopologySettings();
         this._hours = this._settings.get('hours') || 24;
-        this._audio = new TopologyAudio(this._settings);
         this._storeRef = null;
-        this._poller = new SmartPoller({
-            settings: this._settings,
-            store: null,
-            observer: this._observer,
-            onAlert: (a) => this._intel?.pushAlert(a),
-            onQueueChange: (queue, state) => this._intel?.updateQueueStatus(queue, state),
-        });
         this._roster = null;
-        this._intel = null;
-        this._chBar = null;
+        this._mapControls = null;
 
         // D3 graph state (Graph view)
         this._simulation = null;
@@ -50,6 +42,14 @@ class TopologyTab {
         this._unsubStore = null;
         this._liveRefreshTimer = null;
         this._settingsUnsub = this._settings.onChange(() => this._onSettingsChange());
+    }
+
+    _poller() {
+        return window.meshServices?.getPoller?.() || null;
+    }
+
+    _intel() {
+        return window.meshIntelligenceTab?.getIntel?.() || null;
     }
 
     _onSettingsChange() {
@@ -79,10 +79,10 @@ class TopologyTab {
     bindStore(store) {
         if (!store) return;
         this._storeRef = store;
-        if (this._poller) this._poller._store = store;
+        const poller = this._poller();
+        if (poller) poller._store = store;
         if (this._roster) this._roster._store = store;
-        if (this._intel) this._intel._store = store;
-        if (this._intel) this._intel._syncStoreLayers?.();
+        if (this._mapControls) this._mapControls.bindStore(store);
         if (this._topoMap) {
             this._topoMap.setStore(store);
         }
@@ -93,7 +93,7 @@ class TopologyTab {
         this._unsubStore = store.onChange(() => {
             if (this._viewMode === 'graph') this._renderGraph();
             if (this._topoMap && this._viewMode === 'map') this._topoMap.renderTopology();
-            this._intel?.setSelectedNode(this._selectedNode);
+            this._intel()?.setSelectedNode(this._selectedNode);
         });
     }
 
@@ -107,6 +107,7 @@ class TopologyTab {
         this._meshNodes = nodes;
         const store = this._store();
         if (store) store.syncMeshNodes(nodes);
+        window.meshIntelligenceTab?.applyMeshNodes?.(nodes);
         if (this._rendered) {
             this._roster?.render(this._meshNodes);
             if (this._viewMode === 'map') this._ensureTopoMap();
@@ -165,15 +166,15 @@ class TopologyTab {
         }
 
         this._device = deviceRes.ok ? await deviceRes.json() : null;
-        if (this._intel && this._device?.node_id) {
-            this._intel.setDeviceId(this._device.node_id);
+        if (this._intel() && this._device?.node_id) {
+            this._intel().setDeviceId(this._device.node_id);
         }
         if (statusRes.ok) {
             const status = await statusRes.json();
             const txReady = status.traceroute_available !== false && status.meshtastic_tx_enabled !== false;
-            this._poller?.setTxReady(txReady);
+            this._poller()?.setTxReady(txReady);
             this._topologyStatus = status;
-            this._intel?.setTopologyStatus(status);
+            this._intel()?.setTopologyStatus(status);
         }
         if (configRes.ok) {
             const cfg = await configRes.json();
@@ -189,13 +190,14 @@ class TopologyTab {
             ? this._meshNodes
             : (store?.getMeshNodeList?.() || []);
         this._roster?.render(rosterNodes);
-        this._chBar?.refresh(this._hours);
+        if (this._roster) this._roster._poller = this._poller();
         if (this._viewMode === 'map') {
             this._ensureTopoMap();
         } else {
             this._renderGraph();
         }
-        this._intel?.setSelectedNode(this._selectedNode);
+        this._intel()?.setSelectedNode(this._selectedNode);
+        window.meshIntelligenceTab?.setSelectedNode?.(this._selectedNode);
         this._updateStatusStrip();
     }
 
@@ -226,9 +228,8 @@ class TopologyTab {
                             </div>
                         </div>
                     </main>
-                    <aside class="topo-panel topo-panel--intel" id="topo-intel-host"></aside>
+                    <aside class="topo-panel topo-panel--intel" id="topo-map-controls-host"></aside>
                 </div>
-                <div id="topo-chbar-host" class="topo-chbar-host"></div>
             </div>
             <div id="topo-json-modal" class="topo-json-modal" hidden>
                 <div class="topo-json-modal__backdrop"></div>
@@ -248,22 +249,18 @@ class TopologyTab {
         this._roster = new TopologyRoster('topo-roster-host', {
             store: null,
             settings: this._settings,
-            poller: this._poller,
+            poller: this._poller(),
             observer: this._observer,
             onSelect: (node) => this._selectNode(node),
             onAction: (act, node) => this._nodeAction(act, node),
         });
+        this._roster._poller = this._poller();
 
-        this._intel = new TopologyIntel('topo-intel-host', {
-            store: null,
+        this._mapControls = new TopologyMapControls('topo-map-controls-host', {
+            store: this._store(),
             settings: this._settings,
-            poller: this._poller,
-            audio: this._audio,
-            observer: this._observer,
         });
-        this._intel.setOnAction((name) => this._intelAction(name));
-
-        this._chBar = new TopologyChannelBar('topo-chbar-host');
+        this._mapControls.setOnAction((name) => this._mapControlsAction(name));
 
         this._svg = typeof d3 !== 'undefined' ? d3.select('#topo-svg') : null;
         this._emptyEl = document.getElementById('topo-empty');
@@ -291,42 +288,14 @@ class TopologyTab {
     }
 
     ingestPacket(packet) {
-        const src = packet?.source_id;
-        if (!src || !this._poller) return;
-
-        const trace = window.TopologyTrace?.bestTraceRoute?.(packet);
-        if (trace) {
-            const dest = trace.route[trace.route.length - 1];
-            this._poller.recordTraceReply(dest, trace);
-            if (this._rendered) {
-                const hops = window.TopologyTrace.hopCount(trace.route);
-                this._intel?.pushAlert({
-                    type: 'route',
-                    node_id: dest,
-                    node_name: dest,
-                    message: `Traceroute reply — ${hops} hop(s), ${trace.route.length} nodes.`,
-                });
-                const mesh = this._meshNodes.find(
-                    (n) => (n.node_id || n.id || '').replace(/^!/, '').toLowerCase() === dest,
-                );
-                if (mesh) {
-                    this._selectNode(mesh);
-                } else if (this._selectedNode) {
-                    this._intel?.setSelectedNode(this._selectedNode);
-                } else {
-                    this._intel?._renderTraceView?.();
-                }
-                if (this._topoMap && this._viewMode === 'map') {
-                    this._topoMap.renderTopology();
-                }
-            }
+        window.meshIntelligenceTab?.ingestPacket?.(packet);
+        if (this._rendered && this._topoMap && this._viewMode === 'map') {
+            this._topoMap.renderTopology();
         }
+    }
 
-        const srcNorm = src ? String(src).replace(/^!/, '').toLowerCase() : '';
-        const node = this._meshNodes.find(
-            (n) => String(n.node_id || n.id).replace(/^!/, '').toLowerCase() === srcNorm,
-        ) || { node_id: srcNorm || src, id: srcNorm || src };
-        this._poller.notePacket(node, packet);
+    selectNode(node) {
+        this._selectNode(node);
     }
 
     _selectNode(node) {
@@ -335,7 +304,8 @@ class TopologyTab {
         const store = this._store();
         if (store) store.setSelectedNode(id);
         this._roster?.setSelected(id);
-        this._intel?.setSelectedNode(node);
+        this._intel()?.setSelectedNode(node);
+        window.meshIntelligenceTab?.setSelectedNode?.(node);
         if (this._viewMode === 'map' && node.latitude && node.longitude) {
             this._topoMap?.centerOn(node.latitude, node.longitude);
         }
@@ -345,7 +315,7 @@ class TopologyTab {
     async _nodeAction(act, node) {
         const id = node.node_id || node.id;
         if (act === 'trace') {
-            await this._poller?.traceNode(id, { force: true, reason: 'manual' });
+            await this._poller()?.traceNode(id, { force: true, reason: 'manual' });
             return;
         }
         if (act === 'json') {
@@ -356,7 +326,7 @@ class TopologyTab {
             if (node.latitude && node.longitude) {
                 this._topoMap?.centerOn(node.latitude, node.longitude);
             } else {
-                this._intel?.pushAlert({
+                this._intel()?.pushAlert({
                     type: 'warn', node_id: id, node_name: id, message: 'No GPS for this node.',
                 });
             }
@@ -364,14 +334,14 @@ class TopologyTab {
         }
         if (act === 'position') {
             if (this._observer) {
-                this._intel?.pushAlert({
+                this._intel()?.pushAlert({
                     type: 'warn', node_id: id, node_name: node.display_name || id,
                     message: 'Observer mode — position request disabled.',
                 });
                 return;
             }
             if (this._topologyStatus?.position_request_available === false) {
-                this._intel?.pushAlert({
+                this._intel()?.pushAlert({
                     type: 'warn', node_id: id, node_name: node.display_name || id,
                     message: 'Meshtastic TX unavailable — enable onboard TX for position requests.',
                 });
@@ -393,48 +363,19 @@ class TopologyTab {
                 } else {
                     message = data.detail || data.error || `Request failed (${res.status})`;
                 }
-                this._intel?.pushAlert({
+                this._intel()?.pushAlert({
                     type: res.ok ? 'info' : 'warn',
                     node_id: id,
                     node_name: node.display_name || id,
                     message,
                 });
             } catch (e) {
-                this._intel?.pushAlert({ type: 'warn', node_id: id, message: String(e.message || e) });
+                this._intel()?.pushAlert({ type: 'warn', node_id: id, message: String(e.message || e) });
             }
         }
     }
 
-    _intelAction(name) {
-        if (name === 'pollAll') {
-            const n = this._poller?.pollAll(this._meshNodes) || 0;
-            this._intel?.pushAlert({
-                type: 'info', node_id: 'system', node_name: 'TOPOLOGY',
-                message: `Queued ${n} trace${n === 1 ? '' : 's'}.`,
-            });
-            return;
-        }
-        if (name === 'pollRouters') {
-            const n = this._poller?.pollAllRouters(this._meshNodes) || 0;
-            this._intel?.pushAlert({
-                type: 'info', node_id: 'system', node_name: 'TOPOLOGY',
-                message: `Queued ${n} router trace${n === 1 ? '' : 's'}.`,
-            });
-            return;
-        }
-        if (name === 'export') {
-            const data = this._store()?.exportJson();
-            if (!data) return;
-            const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-            const url = URL.createObjectURL(blob);
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = `meshpoint-topology-${Date.now()}.json`;
-            a.click();
-            URL.revokeObjectURL(url);
-            this._intel?.pushAlert({ type: 'info', node_id: 'system', node_name: 'TOPOLOGY', message: 'Snapshot exported.' });
-            return;
-        }
+    _mapControlsAction(name) {
         if (name === 'graph') {
             this._setViewMode('graph');
             return;
@@ -443,9 +384,6 @@ class TopologyTab {
             this._hours = this._settings.get('hours') || 24;
             this.refresh();
             return;
-        }
-        if (name === 'inactChanged') {
-            this._renderAll();
         }
     }
 
@@ -538,8 +476,45 @@ class TopologyTab {
 
     // ── D3 force graph (Graph view) ─────────────────────────────────────
 
-    _filteredEdges() {
-        let edges = (this._graph.edges || []).map((e) => ({ ...e }));
+    _graphPayload() {
+        const store = this._store();
+        if (store) {
+            const snap = store.getSnapshot();
+            const edges = (snap.edges || []).map((e) => ({
+                ...e,
+                source: e.source || e.nodeA,
+                target: e.target || e.nodeB,
+            })).filter((e) => e.source && e.target);
+            let nodes = (snap.nodes || []).map((n) => ({ ...n, id: n.id }));
+            const known = new Set(
+                nodes.map((n) => String(n.id).replace(/^!/, '').toLowerCase()),
+            );
+            for (const e of edges) {
+                for (const raw of [e.source, e.target]) {
+                    const id = String(raw).replace(/^!/, '').toLowerCase();
+                    if (!id || known.has(id)) continue;
+                    known.add(id);
+                    const mesh = (this._meshNodes || []).find(
+                        (n) => String(n.node_id || n.id).replace(/^!/, '').toLowerCase() === id,
+                    );
+                    nodes.push({
+                        id,
+                        label: mesh?.display_name || mesh?.long_name || `!${id.slice(-4)}`,
+                    });
+                }
+            }
+            if (edges.length || nodes.length) {
+                return { nodes, edges };
+            }
+        }
+        return {
+            nodes: (this._graph.nodes || []).map((n) => ({ ...n })),
+            edges: (this._graph.edges || []).map((e) => ({ ...e })),
+        };
+    }
+
+    _filteredEdges(edgesIn) {
+        let edges = (edgesIn || []).map((e) => ({ ...e }));
         if (!this._multiHop) edges = edges.filter((e) => e.edge_type === 'neighborinfo');
         return edges.filter((e) => {
             const snr = e.snr;
@@ -548,15 +523,45 @@ class TopologyTab {
         });
     }
 
+    _applyGraphSelectionFilter(nodes, edges) {
+        const sel = this._selectedNode?.node_id || this._selectedNode?.id;
+        const selNorm = sel ? String(sel).replace(/^!/, '').toLowerCase() : null;
+        if (!selNorm) return { nodes, edges, filtered: false };
+
+        const connected = new Set([selNorm]);
+        for (const e of edges) {
+            const a = String(e.source).replace(/^!/, '').toLowerCase();
+            const b = String(e.target).replace(/^!/, '').toLowerCase();
+            if (a === selNorm || b === selNorm) {
+                connected.add(a);
+                connected.add(b);
+            }
+        }
+        const fnNodes = nodes.filter(
+            (n) => connected.has(String(n.id).replace(/^!/, '').toLowerCase()),
+        );
+        const fnEdges = edges.filter((e) => {
+            const a = String(e.source).replace(/^!/, '').toLowerCase();
+            const b = String(e.target).replace(/^!/, '').toLowerCase();
+            return connected.has(a) && connected.has(b);
+        });
+        if (!fnNodes.length && !fnEdges.length) {
+            return { nodes, edges, filtered: false };
+        }
+        return { nodes: fnNodes, edges: fnEdges, filtered: true };
+    }
+
     _renderGraph() {
         if (typeof d3 === 'undefined' || !this._svg) return;
         const wrap = this._container.querySelector('.topo-canvas-wrap');
         if (!wrap) return;
+        if (this._emptyEl) this._emptyEl.hidden = true;
 
         const width = Math.max(wrap.clientWidth, 320);
         const height = Math.max(wrap.clientHeight, 320);
-        let edges = this._filteredEdges();
-        let nodes = (this._graph.nodes || []).map((n) => ({ ...n }));
+        const payload = this._graphPayload();
+        let edges = this._filteredEdges(payload.edges);
+        let nodes = payload.nodes.map((n) => ({ ...n }));
 
         const pf = this._settings?.get('protocolFilter') || 'all';
         if (pf !== 'all' && window.TopologyProtocol?.matchesProtocolFilter) {
@@ -581,23 +586,10 @@ class TopologyTab {
 
         const sel = this._selectedNode?.node_id || this._selectedNode?.id;
         const selNorm = sel ? String(sel).replace(/^!/, '').toLowerCase() : null;
-        if (selNorm) {
-            const connected = new Set([selNorm]);
-            for (const e of edges) {
-                const a = String(e.source).replace(/^!/, '').toLowerCase();
-                const b = String(e.target).replace(/^!/, '').toLowerCase();
-                if (a === selNorm || b === selNorm) {
-                    connected.add(a);
-                    connected.add(b);
-                }
-            }
-            nodes = nodes.filter((n) => connected.has(String(n.id).replace(/^!/, '').toLowerCase()));
-            edges = edges.filter((e) => {
-                const a = String(e.source).replace(/^!/, '').toLowerCase();
-                const b = String(e.target).replace(/^!/, '').toLowerCase();
-                return connected.has(a) && connected.has(b);
-            });
-        }
+        ({
+            nodes,
+            edges,
+        } = this._applyGraphSelectionFilter(nodes, edges));
 
         if (!nodes.length && !edges.length) {
             this._svg.selectAll('*').remove();

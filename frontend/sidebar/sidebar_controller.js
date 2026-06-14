@@ -183,7 +183,10 @@ class SidebarController {
         if (root === 'stats' && window.statsTab) {
             window.statsTab.refresh();
         }
-        if (root === 'packets' && window.packetsTab) {
+        if ((root === 'intelligence') && window.meshIntelligenceTab) {
+            window.meshIntelligenceTab.refresh();
+        }
+        if (root === 'intelligence' && window.packetsTab) {
             window.packetsTab.refresh();
         }
         if (root === 'topology' && window.topologyTab) {

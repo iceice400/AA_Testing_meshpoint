@@ -512,6 +512,46 @@
     pointer-events: none;
 }
 
+.topo-empty[hidden] {
+    display: none !important;
+}
+
+.topo-trace-history {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+}
+
+.topo-trace-history__row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    width: 100%;
+    padding: 0.35rem 0.45rem;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: var(--bg-primary);
+    color: var(--text-secondary);
+    font-family: var(--font-mono);
+    font-size: 0.62rem;
+    cursor: pointer;
+    text-align: left;
+}
+
+.topo-trace-history__row:hover {
+    border-color: var(--accent-blue);
+    color: var(--text-primary);
+}
+
+.topo-trace-history__node {
+    color: var(--accent-cyan);
+    font-weight: 600;
+}
+
+.topo-trace-history__meta {
+    color: var(--text-muted);
+}
+
 .topo-loading {
     position: absolute;
     inset: 0;
