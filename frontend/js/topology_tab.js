@@ -253,6 +253,11 @@ class TopologyTab {
             observer: this._observer,
             onSelect: (node) => this._selectNode(node),
             onAction: (act, node) => this._nodeAction(act, node),
+            onFilterChange: (filters) => {
+                if (this._topoMap?.setRosterRoleFilters) {
+                    this._topoMap.setRosterRoleFilters(filters);
+                }
+            },
         });
         this._roster._poller = this._poller();
 
@@ -439,6 +444,9 @@ class TopologyTab {
         this._topoMap.setLocalNodeId(this._localMeshNodeId);
         this._topoMap.setProtocolFilter(this._settings.get('protocolFilter') || 'all');
         this._topoMap.loadNodes(this._filterByProtocol(this._meshNodes), this._device);
+        if (this._roster?._filters) {
+            this._topoMap.setRosterRoleFilters(this._roster._filters);
+        }
         this._topoMap.renderTopology();
         const refit = () => {
             this._topoMap?._map?.invalidateSize();

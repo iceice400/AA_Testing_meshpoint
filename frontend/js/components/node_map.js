@@ -41,6 +41,7 @@ class NodeMap {
         this._localNodeId = options.localNodeId || null;
         this._settings = options.settings || null;
         this._protocolFilter = options.settings?.get('protocolFilter') || 'all';
+        this._rosterRoleFilters = null;
         this._darkOrbitLayer = null;
         this._initialized = false;
         this._hasFitBounds = false;
@@ -397,6 +398,18 @@ class NodeMap {
         return nodes;
     }
 
+    setRosterRoleFilters(filters) {
+        this._rosterRoleFilters = filters ? new Set(filters) : null;
+        this.renderTopology();
+    }
+
+    _darkFilterActive() {
+        const f = this._rosterRoleFilters;
+        if (!f || !f.size) return false;
+        const roleOn = ['ROUTER', 'CLIENT', 'REPEATER', 'TRACKER', 'SENSOR'].some((r) => f.has(r));
+        return f.has('DARK') && !roleOn;
+    }
+
     setStore(store) {
         if (this._unsubStore) {
             this._unsubStore();
@@ -590,6 +603,7 @@ class NodeMap {
                 });
                 if (this._store) {
                     this._store.mapMode = mode;
+                    this._store.layers.edges = true;
                     if (mode === 'coverage') {
                         this._store.layers.coverage = true;
                         this._setCoverageVisible(true);
@@ -698,17 +712,23 @@ class NodeMap {
         } else if (this._topologyVisible) {
             this._loadTopology();
         }
+
+        if (this._topologyEnabled && this._store) {
+            const snap = this._store.getSnapshot();
+            this._updateBadges(snap, (this._edgeLines?.size || 0) + (this._routeLines?.length || 0));
+        }
     }
 
     renderTopology() {
         if (!this._topologyEnabled || !this._initialized || !this._store) return;
 
         const snap = this._store.getSnapshot();
-        const showEdges = this._store.layers.edges !== false;
-        const showDark = this._store.layers.darkStubs !== false;
-        const showLabels = this._store.layers.labels !== false;
         const mode = this._store.mapMode || 'topology';
         const hopMode = mode === 'hop';
+        const mapEdges = snap.map_edges || snap.edges || [];
+        const showEdges = this._store.layers.edges !== false;
+        const showDark = this._store.layers.darkStubs !== false || this._darkFilterActive();
+        const showLabels = this._store.layers.labels !== false;
 
         if (this._store.layers.coverage) {
             this._setCoverageVisible(true);
@@ -717,11 +737,16 @@ class NodeMap {
         this._ensureMarkersPlotted(this._store.getPlottedMeshNodes?.() || []);
         const stubPool = this._mergeUnplottedEdgeEndpoints(
             snap.unplotted,
-            snap.edges || [],
+            mapEdges,
             snap.routes || [],
         );
-        this._renderDarkStubs(stubPool, snap.estimates || [], showDark);
-        const drawnLinks = this._renderEdges(snap.edges, showEdges, mode);
+        this._renderDarkStubs(
+            stubPool,
+            snap.estimates || [],
+            showDark,
+            this._darkFilterActive(),
+        );
+        const drawnLinks = this._renderEdges(mapEdges, showEdges, mode);
         const drawnRoutes = this._renderRoutePaths(
             snap.routes,
             showEdges && mode !== 'coverage',
@@ -811,14 +836,15 @@ class NodeMap {
         if (!showRoutes || !routes?.length) return 0;
 
         const selected = this._store?.selectedNodeId;
-        const pool = selected
-            ? routes.filter((r) => (r.route || []).includes(selected))
-            : routes;
+        const pool = (hopEmphasis || !selected)
+            ? routes
+            : routes.filter((r) => (r.route || []).includes(selected));
         const now = Date.now();
         const hopLiveMs = 120_000;
         let drawn = 0;
+        const limit = hopEmphasis ? 24 : 12;
 
-        for (const route of pool.slice(0, 12)) {
+        for (const route of pool.slice(0, limit)) {
             const path = route.route || [];
             const snrTowards = route.snr_towards || [];
             const routeTs = route.ts
@@ -931,7 +957,7 @@ class NodeMap {
         return stored?.label || nodeId;
     }
 
-    _renderDarkStubs(unplotted, estimates, showDark) {
+    _renderDarkStubs(unplotted, estimates, showDark, emphasizeDark = false) {
         this._darkStubLayer.clearLayers();
         this._ensureDarkOrbitLayer().clearLayers();
         this._darkStubMarkers.clear();
@@ -952,8 +978,9 @@ class NodeMap {
 
         let stubIndex = 0;
         let usedStubRing = false;
+        const stubLimit = emphasizeDark ? 64 : 32;
 
-        for (const node of unplotted.slice(0, 32)) {
+        for (const node of unplotted.slice(0, stubLimit)) {
             const nid = _normNodeId(node.id);
             const est = estimateById.get(nid);
             let pos;
@@ -994,12 +1021,12 @@ class NodeMap {
 
             const marker = L.marker(pos, {
                 icon: L.divIcon({
-                    html: '<div class="dark-stub-marker dark-stub-marker--unknown"><span>?</span></div>',
+                    html: `<div class="dark-stub-marker${emphasizeDark ? ' dark-stub-marker--emphasis' : ''} dark-stub-marker--unknown"><span>?</span></div>`,
                     className: '',
                     iconSize: [18, 18],
                     iconAnchor: [9, 9],
                 }),
-                zIndexOffset: 200,
+                zIndexOffset: emphasizeDark ? 400 : 200,
             });
             marker.bindPopup(
                 `<strong>${this._esc(node.label)}</strong><br>` +
@@ -1059,19 +1086,45 @@ class NodeMap {
         }
     }
 
+    _ensureBadgeRefs() {
+        if (!this._badgesEl) return;
+        if (!this._badgeNodesEl) {
+            this._badgeNodesEl = this._badgesEl.querySelector('.map-badge-nodes');
+            this._badgeLinksEl = this._badgesEl.querySelector('.map-badge-links');
+            this._badgeDarkEl = this._badgesEl.querySelector('.map-badge-dark');
+            this._badgeWarnEl = this._badgesEl.querySelector('.map-badge-warn');
+            this._badgeWarnTxtEl = this._badgesEl.querySelector('.map-badge-warn-txt');
+        }
+    }
+
     _updateBadges(snap, drawnLinks = 0) {
+        this._ensureBadgeRefs();
         const markerCount = Object.keys(this._markers || {}).length;
         const stubCount = this._darkStubMarkers?.size || 0;
         const hasDevice = !!(this._deviceMarker || (this._lastDevice?.latitude && this._lastDevice?.longitude));
+        const fromLastNodes = (this._lastNodes || []).filter(
+            (n) => _isValidGps(n.latitude, n.longitude),
+        ).length;
         const plotted = Math.max(
             markerCount + stubCount,
             snap.mapped || 0,
+            fromLastNodes,
             markerCount + (hasDevice ? 1 : 0),
         );
-        const graphLinks = snap.edges?.length || 0;
-        const routeLinks = snap.routes?.length || 0;
-        const linkCount = Math.max(drawnLinks, graphLinks, routeLinks > 0 ? graphLinks : 0);
-        const darkCount = snap.dark ?? snap.unplotted?.length ?? 0;
+        const hopSegments = [...(this._hopSegmentLines?.values() || [])]
+            .reduce((sum, lines) => sum + lines.length, 0);
+        const graphLinks = snap.map_edges?.length || snap.edges?.length || 0;
+        const routeCount = snap.routes?.length || 0;
+        const edgeLineCount = this._edgeLines?.size || 0;
+        const linkCount = Math.max(
+            drawnLinks,
+            edgeLineCount,
+            hopSegments,
+            graphLinks,
+            routeCount > 0 ? Math.max(graphLinks, hopSegments) : 0,
+        );
+        const darkFromStore = snap.dark ?? snap.unplotted?.length ?? 0;
+        const darkCount = Math.max(stubCount, darkFromStore);
 
         if (this._badgeNodesEl) this._badgeNodesEl.textContent = String(plotted);
         if (this._badgeLinksEl) this._badgeLinksEl.textContent = String(linkCount);

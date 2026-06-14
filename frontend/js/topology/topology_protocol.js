@@ -55,6 +55,31 @@
         return { mt, mc, total: (nodes || []).length };
     }
 
+    /** Unified roster role bucket for Meshtastic + MeshCore nodes. */
+    function normalizeRole(role, node) {
+        const proto = resolveNodeProtocol(node);
+        const mtMap = { 0: 'CLIENT', 1: 'CLIENT', 2: 'ROUTER', 3: 'ROUTER', 4: 'REPEATER', 5: 'TRACKER', 6: 'SENSOR' };
+        if (role != null && role !== '') {
+            const n = Number(role);
+            if (!Number.isNaN(n) && mtMap[n]) return mtMap[n];
+        }
+        const t = String(role || '').toUpperCase();
+        if (!t || t === 'UNKNOWN' || t === 'UNSET') {
+            return proto === 'meshcore' ? 'CLIENT' : 'CLIENT';
+        }
+        if (t.includes('ROUTER') || t.includes('GATEWAY')) return 'ROUTER';
+        if (t.includes('REPEAT') || t.includes('RELAY')) return 'REPEATER';
+        if (t.includes('TRACK')) return 'TRACKER';
+        if (t.includes('SENSOR')) return 'SENSOR';
+        if (t.includes('COMPANION')) return 'CLIENT';
+        if (t.includes('CLIENT')) return 'CLIENT';
+        return t;
+    }
+
+    function roleFilterIds() {
+        return ['ROUTER', 'CLIENT', 'REPEATER', 'TRACKER', 'SENSOR', 'DARK', 'ACTIVE'];
+    }
+
     window.TopologyProtocol = {
         FILTERS,
         normalizeId,
@@ -65,5 +90,7 @@
         matchesProtocolFilter,
         filterNodes,
         protocolCounts,
+        normalizeRole,
+        roleFilterIds,
     };
 })();

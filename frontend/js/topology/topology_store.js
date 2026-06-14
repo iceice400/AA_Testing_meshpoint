@@ -311,8 +311,17 @@
             const traceRoutes = window.TopologyTrace?.extractTraceRoutes?.(packet) || [];
             let addedRoute = false;
             for (const trace of traceRoutes) {
-                const routeIds = trace.route;
-                if (!Array.isArray(routeIds) || routeIds.length < 2) continue;
+                let routeIds = trace.route;
+                if ((!Array.isArray(routeIds) || routeIds.length < 2)
+                    && window.TopologyTrace?.buildTracePath) {
+                    routeIds = window.TopologyTrace.buildTracePath(
+                        sourceId,
+                        trace.destination || trace.destination_id,
+                        routeIds || [],
+                    );
+                }
+                routeIds = (routeIds || []).map((h) => normalizeNodeId(h)).filter(Boolean);
+                if (routeIds.length < 2) continue;
                 for (let i = 0; i < routeIds.length - 1; i++) {
                     this._upsertEdge(routeIds[i], routeIds[i + 1], {
                         rssi,
@@ -369,14 +378,22 @@
         }
 
         getFilteredEdges() {
+            return this._filterEdges(this.mapMode || 'topology', this._selectedNodeId);
+        }
+
+        /** Map rendering — hop mode shows traceroute/routing edges; topology shows all. */
+        getMapEdges(mode = this.mapMode || 'topology') {
+            return this._filterEdges(mode, this._selectedNodeId);
+        }
+
+        _filterEdges(mode, selectedNodeId) {
             const f = this.filters;
-            const selected = this._selectedNodeId;
-            const routeKeys = selected && this.mapMode === 'hop'
-                ? this._routeEdgeKeys(selected)
+            const routeKeys = selectedNodeId && mode === 'hop'
+                ? this._routeEdgeKeys(selectedNodeId)
                 : null;
 
             return [...this._edges.values()].filter((edge) => {
-                if (this.mapMode === 'hop' && !routeKeys) {
+                if (mode === 'hop') {
                     const kind = edge.edge_type || edge.source_kind || '';
                     if (kind !== 'traceroute' && kind !== 'routing') return false;
                 }
@@ -426,6 +443,7 @@
 
         getSnapshot() {
             const edges = this.getFilteredEdges();
+            const mapEdges = this.getMapEdges();
             const nodes = [...this._nodes.values()];
             const mapped = this.getPlottedMeshNodes().length;
             const unplotted = this.getUnplotted();
@@ -434,6 +452,7 @@
             return {
                 nodes,
                 edges,
+                map_edges: mapEdges,
                 routes: this._routes,
                 edge_sources: this._edgeSources,
                 stats: this._stats,
