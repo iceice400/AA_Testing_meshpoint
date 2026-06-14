@@ -3,6 +3,7 @@
  */
 
 const MAP_VIEW_STORAGE_KEY = 'meshpoint.nodeMap.view';
+const DASHBOARD_TOPOLOGY_OVERLAY_KEY = 'meshpoint.dashboard.topologyLinks';
 const MAP_DEFAULT_CENTER = [39.8, -98.5];
 const MAP_DEFAULT_ZOOM = 4;
 
@@ -175,6 +176,7 @@ class NodeMap {
         this._map.on('overlayadd', (e) => {
             if (e.layer === this._topologyLayer) {
                 this._topologyVisible = true;
+                this._saveDashboardTopologyOverlay(true);
                 this._loadTopology();
             }
             if (e.layer === this._coverageLayer) {
@@ -185,12 +187,42 @@ class NodeMap {
         this._map.on('overlayremove', (e) => {
             if (e.layer === this._topologyLayer) {
                 this._topologyVisible = false;
+                this._saveDashboardTopologyOverlay(false);
                 if (this._topologyHintEl) this._topologyHintEl.hidden = true;
             }
             if (e.layer === this._coverageLayer) {
                 this._coverageVisible = false;
             }
         });
+
+        if (this._loadDashboardTopologyOverlay()) {
+            this._topologyVisible = true;
+            this._map.addLayer(this._topologyLayer);
+            this._loadTopology();
+        }
+    }
+
+    _loadDashboardTopologyOverlay() {
+        try {
+            return localStorage.getItem(DASHBOARD_TOPOLOGY_OVERLAY_KEY) === '1';
+        } catch (_e) {
+            return false;
+        }
+    }
+
+    _saveDashboardTopologyOverlay(on) {
+        try {
+            localStorage.setItem(DASHBOARD_TOPOLOGY_OVERLAY_KEY, on ? '1' : '0');
+        } catch (_e) {
+            /* best-effort */
+        }
+    }
+
+    _ensureDarkOrbitLayer() {
+        if (this._darkOrbitLayer) return this._darkOrbitLayer;
+        this._darkOrbitLayer = L.layerGroup();
+        if (this._map) this._darkOrbitLayer.addTo(this._map);
+        return this._darkOrbitLayer;
     }
 
     async _loadTopology() {
@@ -247,7 +279,14 @@ class NodeMap {
                 return;
             }
 
-            this._drawTopologyLinks(links, unplotted, estimates, routes);
+            if (this._store?.getPlottedMeshNodes) {
+                this._ensureMarkersPlotted(this._store.getPlottedMeshNodes());
+            }
+
+            const drawn = this._drawTopologyLinks(links, unplotted, estimates, routes);
+            if (this._store) {
+                this._updateBadges(this._store.getSnapshot(), drawn);
+            }
         } catch (e) {
             console.error('Topology redraw failed:', e);
         }
@@ -293,12 +332,14 @@ class NodeMap {
             this._topologyLayer.addLayer(line);
         }
 
-        this._drawRoutePathsOverlay(routes);
-        this._updateTopologyHint(links.length, drawn);
+        const routeDrawn = this._drawRoutePathsOverlay(routes);
+        this._updateTopologyHint(links.length, drawn + routeDrawn);
+        return drawn + routeDrawn;
     }
 
     _drawRoutePathsOverlay(routes) {
-        if (!routes?.length) return;
+        if (!routes?.length) return 0;
+        let drawn = 0;
         for (const route of routes.slice(0, 12)) {
             const path = route.route || [];
             const snrTowards = route.snr_towards || [];
@@ -306,6 +347,7 @@ class NodeMap {
                 const a = this._resolveLatLng(path[i]);
                 const b = this._resolveLatLng(path[i + 1]);
                 if (!a || !b) continue;
+                drawn += 1;
                 const snr = snrTowards[i];
                 const color = this._snrHopColor(snr);
                 const line = L.polyline([a, b], {
@@ -317,6 +359,7 @@ class NodeMap {
                 line.addTo(this._topologyLayer);
             }
         }
+        return drawn;
     }
 
     refreshTopologyOverlay() {
@@ -679,13 +722,13 @@ class NodeMap {
         );
         this._renderDarkStubs(stubPool, snap.estimates || [], showDark);
         const drawnLinks = this._renderEdges(snap.edges, showEdges, mode);
-        this._renderRoutePaths(
+        const drawnRoutes = this._renderRoutePaths(
             snap.routes,
             showEdges && mode !== 'coverage',
             hopMode,
         );
         this._updateLabels(showLabels);
-        this._updateBadges(snap, drawnLinks);
+        this._updateBadges(snap, drawnLinks + drawnRoutes);
         this._updateStatusStrip(snap);
     }
 
@@ -765,7 +808,7 @@ class NodeMap {
             }
         }
         this._hopSegmentLines.clear();
-        if (!showRoutes || !routes?.length) return;
+        if (!showRoutes || !routes?.length) return 0;
 
         const selected = this._store?.selectedNodeId;
         const pool = selected
@@ -773,6 +816,7 @@ class NodeMap {
             : routes;
         const now = Date.now();
         const hopLiveMs = 120_000;
+        let drawn = 0;
 
         for (const route of pool.slice(0, 12)) {
             const path = route.route || [];
@@ -788,6 +832,7 @@ class NodeMap {
                 const b = this._resolveLatLng(path[i + 1]);
                 if (!a || !b) continue;
 
+                drawn += 1;
                 const snr = snrTowards[i];
                 const color = this._snrHopColor(snr);
                 const line = L.polyline([a, b], {
@@ -818,6 +863,7 @@ class NodeMap {
                     if (ll) latlngs.push(ll);
                 }
                 if (latlngs.length >= 2) {
+                    drawn += 1;
                     const line = L.polyline(latlngs, {
                         color: this._cssToken('--accent-amber', '#f59e0b'),
                         weight: 3,
@@ -836,6 +882,7 @@ class NodeMap {
                 }
             }
         }
+        return drawn;
     }
 
     _snrHopColor(snr) {
@@ -886,7 +933,7 @@ class NodeMap {
 
     _renderDarkStubs(unplotted, estimates, showDark) {
         this._darkStubLayer.clearLayers();
-        this._darkOrbitLayer.clearLayers();
+        this._ensureDarkOrbitLayer().clearLayers();
         this._darkStubMarkers.clear();
 
         if (!showDark || !unplotted?.length) {
@@ -923,7 +970,7 @@ class NodeMap {
                         fillColor: '#9b8aff',
                         fillOpacity: 0.08,
                         dashArray: '4, 4',
-                    }).addTo(this._darkOrbitLayer);
+                    }).addTo(this._ensureDarkOrbitLayer());
                 }
             } else if (stubCenter) {
                 if (!usedStubRing) {
@@ -935,7 +982,7 @@ class NodeMap {
                         fill: false,
                         dashArray: '4, 4',
                         opacity: 0.45,
-                    }).addTo(this._darkOrbitLayer);
+                    }).addTo(this._ensureDarkOrbitLayer());
                     usedStubRing = true;
                 }
                 pos = this._stubPosition(stubCenter, node.id, stubIndex);
@@ -1013,18 +1060,29 @@ class NodeMap {
     }
 
     _updateBadges(snap, drawnLinks = 0) {
-        const plotted = Object.keys(this._markers || {}).length;
-        const linkCount = drawnLinks || snap.edges?.length || 0;
+        const markerCount = Object.keys(this._markers || {}).length;
+        const stubCount = this._darkStubMarkers?.size || 0;
+        const hasDevice = !!(this._deviceMarker || (this._lastDevice?.latitude && this._lastDevice?.longitude));
+        const plotted = Math.max(
+            markerCount + stubCount,
+            snap.mapped || 0,
+            markerCount + (hasDevice ? 1 : 0),
+        );
+        const graphLinks = snap.edges?.length || 0;
+        const routeLinks = snap.routes?.length || 0;
+        const linkCount = Math.max(drawnLinks, graphLinks, routeLinks > 0 ? graphLinks : 0);
+        const darkCount = snap.dark ?? snap.unplotted?.length ?? 0;
+
         if (this._badgeNodesEl) this._badgeNodesEl.textContent = String(plotted);
         if (this._badgeLinksEl) this._badgeLinksEl.textContent = String(linkCount);
-        if (this._badgeDarkEl) this._badgeDarkEl.textContent = String(snap.dark ?? 0);
+        if (this._badgeDarkEl) this._badgeDarkEl.textContent = String(darkCount);
 
         const unplottedEl = document.getElementById('map-unplotted');
         if (unplottedEl) {
-            if (snap.dark > 0) {
+            if (darkCount > 0) {
                 unplottedEl.hidden = false;
                 unplottedEl.classList.add('map-unplotted--visible');
-                unplottedEl.textContent = `${snap.dark} unplotted`;
+                unplottedEl.textContent = `${darkCount} unplotted`;
             } else {
                 unplottedEl.hidden = true;
                 unplottedEl.classList.remove('map-unplotted--visible');
