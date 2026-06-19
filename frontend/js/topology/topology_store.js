@@ -104,8 +104,12 @@
             const id = normalizeNodeId(nodeId);
             if (!id) return null;
             const mesh = this._meshNodes.get(id);
-            if (mesh && _coordsValid(mesh.latitude, mesh.longitude)) {
-                return { lat: Number(mesh.latitude), lng: Number(mesh.longitude) };
+            if (mesh) {
+                const lat = mesh.latitude ?? mesh.lat;
+                const lng = mesh.longitude ?? mesh.lng;
+                if (_coordsValid(lat, lng)) {
+                    return { lat: Number(lat), lng: Number(lng) };
+                }
             }
             const node = this._nodes.get(id);
             if (node && _coordsValid(node.lat, node.lng)) {
@@ -125,8 +129,10 @@
         getPlottedMeshNodes() {
             const out = [];
             for (const n of this._meshNodes.values()) {
-                if (_coordsValid(n.latitude, n.longitude)) {
-                    out.push(n);
+                const lat = n.latitude ?? n.lat;
+                const lng = n.longitude ?? n.lng;
+                if (_coordsValid(lat, lng)) {
+                    out.push({ ...n, latitude: lat, longitude: lng });
                 }
             }
             return out;
@@ -153,8 +159,8 @@
                     longName: n.long_name || n.long_name,
                     protocol: n.protocol || existing.protocol || 'meshtastic',
                     role: n.role || existing.role || 'CLIENT',
-                    lat: n.latitude ?? existing.lat ?? null,
-                    lng: n.longitude ?? existing.lng ?? null,
+                    lat: n.latitude ?? n.lat ?? existing.lat ?? null,
+                    lng: n.longitude ?? n.lng ?? existing.lng ?? null,
                     latest_rssi: n.rssi ?? n.latest_rssi ?? existing.latest_rssi ?? null,
                     packet_count: existing.packet_count ?? 0,
                 });

@@ -92,7 +92,6 @@ class TopologyTab {
         }
         this._unsubStore = store.onChange(() => {
             if (this._viewMode === 'graph') this._renderGraph();
-            if (this._topoMap && this._viewMode === 'map') this._topoMap.renderTopology();
             this._intel()?.setSelectedNode(this._selectedNode);
         });
     }
@@ -285,12 +284,11 @@ class TopologyTab {
                 setTimeout(() => {
                     if (this._viewMode === 'map') {
                         this._ensureTopoMap();
-                        this._topoMap?.renderTopology();
+                        this._topoMap?.activate?.();
                     }
-                }, 100);
+                }, 150);
                 return;
             }
-            this._topoMap?.resetMapMode?.();
             if (this._liveRefreshTimer) {
                 clearInterval(this._liveRefreshTimer);
                 this._liveRefreshTimer = null;
@@ -306,7 +304,7 @@ class TopologyTab {
     ingestPacket(packet) {
         window.meshIntelligenceTab?.ingestPacket?.(packet);
         if (this._rendered && this._topoMap && this._viewMode === 'map') {
-            this._topoMap.renderTopology();
+            this._topoMap.scheduleStoreRender?.();
         }
     }
 
@@ -455,7 +453,7 @@ class TopologyTab {
         this._topoMap.setLocalNodeId(this._localMeshNodeId);
         this._topoMap.setProtocolFilter(this._settings.get('protocolFilter') || 'all');
         this._topoMap.loadNodes(this._filterByProtocol(this._meshNodes), this._device);
-        this._topoMap.renderTopology();
+        this._topoMap.activate();
         const refit = () => {
             this._topoMap?._map?.invalidateSize();
             if (this._topoMap && !this._topoMap._hasFitBounds

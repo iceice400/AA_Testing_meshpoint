@@ -140,6 +140,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 
     const nodeMap = new NodeMap('map', { topology: false });
     nodeMap.setStore(topologyStore);
+    window.dashboardNodeMap = nodeMap;
     const packetFeed = new SimplePacketFeed('packet-tbody');
 
     const nodeDrawer = new NodeDrawer('node-drawer', {

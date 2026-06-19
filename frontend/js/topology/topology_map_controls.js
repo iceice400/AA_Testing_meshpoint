@@ -98,7 +98,7 @@
             this._store.layers.edges = this._settings.get('edgesOn') !== false;
             this._store.layers.darkStubs = this._settings.get('darkInfOn') !== false;
             this._store.layers.labels = this._settings.get('labelsOn') !== false;
-            this._store.notifyChange();
+            window.topologyTab?._topoMap?.scheduleStoreRender?.();
         }
 
         setOnAction(fn) { this._onAction = fn; }

@@ -48,6 +48,7 @@ class NodeMap {
         this._hasFitBounds = false;
         this._statusStrip = null;
         this._unsubStore = null;
+        this._renderPending = false;
         this._init();
     }
 
@@ -123,7 +124,7 @@ class NodeMap {
 
             if (this._store) {
                 this._unsubStore = this._store.onChange(() => {
-                    this.renderTopology();
+                    this.scheduleStoreRender();
                 });
             }
         } else {
@@ -247,6 +248,10 @@ class NodeMap {
 
     _redrawTopologyOverlayFromStore() {
         try {
+            if (!this._topologyVisible || !this._map) return;
+            if (!this._map.hasLayer(this._topologyLayer)) {
+                this._map.addLayer(this._topologyLayer);
+            }
             let links = [];
             let unplotted = [];
             let estimates = [];
@@ -336,6 +341,64 @@ class NodeMap {
         return drawn;
     }
 
+    scheduleStoreRender() {
+        if (!this._store) return;
+        if (!this._isMapVisible()) {
+            this._renderPending = true;
+            return;
+        }
+        this._renderPending = false;
+        if (this._topologyEnabled) {
+            this.renderTopology();
+        } else if (this._topologyVisible) {
+            this._redrawTopologyOverlayFromStore();
+        }
+    }
+
+    activate() {
+        if (!this._map) return;
+        requestAnimationFrame(() => {
+            if (!this._map) return;
+            this._map.invalidateSize();
+            if (this._topologyEnabled && this._store) {
+                this.renderTopology();
+            } else if (this._topologyVisible && this._store) {
+                if (!this._map.hasLayer(this._topologyLayer)) {
+                    this._map.addLayer(this._topologyLayer);
+                }
+                this._redrawTopologyOverlayFromStore();
+            }
+            if (this._renderPending) {
+                this._renderPending = false;
+                this.scheduleStoreRender();
+            }
+        });
+    }
+
+    _isMapVisible() {
+        const el = document.getElementById(this._containerId);
+        if (!el) return false;
+        let node = el;
+        while (node) {
+            if (node.style?.display === 'none') return false;
+            node = node.parentElement;
+        }
+        const rect = el.getBoundingClientRect();
+        return rect.width > 8 && rect.height > 8;
+    }
+
+    _layerEnabled(key, fallback = true) {
+        if (this._topologyEnabled && this._settings) {
+            if (key === 'edges') return this._settings.get('edgesOn') !== false;
+            if (key === 'darkStubs') return this._settings.get('darkInfOn') !== false;
+            if (key === 'labels') return this._settings.get('labelsOn') !== false;
+        }
+        if (this._store?.layers) {
+            return this._store.layers[key] !== false;
+        }
+        return fallback;
+    }
+
     refreshTopologyOverlay() {
         if (this._topologyEnabled) {
             this.renderTopology();
@@ -391,15 +454,11 @@ class NodeMap {
         this._store = store || null;
         if (this._store) {
             this._unsubStore = this._store.onChange(() => {
-                if (this._topologyEnabled) {
-                    this.renderTopology();
-                } else if (this._topologyVisible) {
-                    this._redrawTopologyOverlayFromStore();
-                }
+                this.scheduleStoreRender();
             });
         }
         if (this._topologyEnabled && this._store) {
-            this.renderTopology();
+            this.scheduleStoreRender();
         } else if (this._topologyVisible && this._store) {
             this._redrawTopologyOverlayFromStore();
         }
@@ -433,8 +492,11 @@ class NodeMap {
         const mesh = this._lastNodes?.find(
             (n) => _normNodeId(n.node_id || n.id) === id,
         );
-        if (mesh && _isValidGps(mesh.latitude, mesh.longitude)) {
-            return { lat: Number(mesh.latitude), lng: Number(mesh.longitude) };
+        if (mesh && _isValidGps(mesh.latitude ?? mesh.lat, mesh.longitude ?? mesh.lng)) {
+            return {
+                lat: Number(mesh.latitude ?? mesh.lat),
+                lng: Number(mesh.longitude ?? mesh.lng),
+            };
         }
         return null;
     }
@@ -514,8 +576,16 @@ class NodeMap {
 
     _buildMapChrome() {
         if (!this._mapWrap || !this._topologyEnabled) return;
+        const badgeHostId = `map-badges-${this._containerId}`;
+        if (this._mapWrap.querySelector(`#${badgeHostId}`)) {
+            this._badgesEl = this._mapWrap.querySelector(`#${badgeHostId}`);
+            this._ensureBadgeRefs();
+            this._syncModeBarUI();
+            return;
+        }
 
         this._badgesEl = document.createElement('div');
+        this._badgesEl.id = badgeHostId;
         this._badgesEl.className = 'map-status-badges';
         this._badgesEl.innerHTML = `
             <span class="map-status-badge">Nodes <strong class="map-badge-nodes">0</strong></span>
@@ -648,12 +718,12 @@ class NodeMap {
 
         const mapNodes = this._filterByProtocol(this._nodesForMapMarkers(nodes));
         for (const n of mapNodes) {
-            const lat = n.latitude;
-            const lon = n.longitude;
+            const lat = n.latitude ?? n.lat;
+            const lon = n.longitude ?? n.lng;
             if (!_isValidGps(lat, lon)) continue;
 
             bounds.push([lat, lon]);
-            this._addNodeMarker(n);
+            this._addNodeMarker({ ...n, latitude: lat, longitude: lon });
         }
 
         if (!this._hasFitBounds && bounds.length > 0) {
@@ -686,15 +756,10 @@ class NodeMap {
         if (this._localMapMode === next) return;
         this._localMapMode = next;
         this._syncModeBarUI();
-        if (this._store) {
-            this._store.layers.edges = true;
-            if (next === 'coverage') {
-                this._store.layers.coverage = true;
-                this._setCoverageVisible(true);
-            } else if (this._coverageVisible) {
-                this._store.layers.coverage = false;
-                this._setCoverageVisible(false);
-            }
+        if (next === 'coverage') {
+            this._setCoverageVisible(true);
+        } else if (this._coverageVisible) {
+            this._setCoverageVisible(false);
         }
         if (next !== 'hop') {
             this._clearRoutePaths();
@@ -703,12 +768,7 @@ class NodeMap {
     }
 
     resetMapMode() {
-        this._localMapMode = 'topology';
-        this._syncModeBarUI();
-        this._clearRoutePaths();
-        if (this._topologyEnabled) {
-            this.renderTopology();
-        }
+        this.setMapMode('topology');
     }
 
     _syncModeBarUI() {
@@ -737,16 +797,20 @@ class NodeMap {
 
     renderTopology() {
         if (!this._topologyEnabled || !this._initialized || !this._store) return;
+        if (!this._isMapVisible()) {
+            this._renderPending = true;
+            return;
+        }
 
         const snap = this._store.getSnapshot();
         const mode = this._localMapMode || 'topology';
         const hopMode = mode === 'hop';
         const mapEdges = this._store.getMapEdges(mode);
-        const showEdges = this._store.layers.edges !== false;
-        const showDark = this._store.layers.darkStubs !== false || this._darkFilterActive();
-        const showLabels = this._store.layers.labels !== false;
+        const showEdges = this._layerEnabled('edges');
+        const showDark = this._layerEnabled('darkStubs') || this._darkFilterActive();
+        const showLabels = this._layerEnabled('labels');
 
-        if (this._store.layers.coverage) {
+        if (mode === 'coverage') {
             this._setCoverageVisible(true);
         }
 
@@ -1102,8 +1166,11 @@ class NodeMap {
 
     _ensureBadgeRefs() {
         if (!this._topologyEnabled) return;
+        const badgeHostId = `map-badges-${this._containerId}`;
         if (!this._badgesEl || !document.body.contains(this._badgesEl)) {
-            this._badgesEl = this._mapWrap?.querySelector('.map-status-badges') || null;
+            this._badgesEl = this._mapWrap?.querySelector(`#${badgeHostId}`)
+                || this._mapWrap?.querySelector('.map-status-badges')
+                || null;
         }
         if (!this._badgesEl) return;
         this._badgeNodesEl = this._badgesEl.querySelector('.map-badge-nodes');
@@ -1131,35 +1198,39 @@ class NodeMap {
     _updateBadges(snap, drawnLinks = 0, mode = 'topology') {
         if (!this._topologyEnabled) return;
         this._ensureBadgeRefs();
-        if (!this._badgeNodesEl && this._mapWrap && !this._mapWrap.querySelector('.map-status-badges')) {
+        if (!this._badgeNodesEl && this._mapWrap && !this._mapWrap.querySelector(`#map-badges-${this._containerId}`)) {
             this._buildMapChrome();
             this._ensureBadgeRefs();
         }
         if (!this._badgeNodesEl) return;
 
+        const meshList = this._store?.getMeshNodeList?.() || this._lastNodes || [];
         const markerCount = this._plottedMarkerCount();
         const stubCount = this._darkStubMarkers?.size || 0;
+        const fromMeshList = this._countGpsNodes(meshList);
         const fromLastNodes = this._countGpsNodes(this._lastNodes);
         const plotted = Math.max(
             markerCount,
-            stubCount + markerCount,
-            snap?.mapped || 0,
+            fromMeshList,
             fromLastNodes,
+            snap?.mapped || 0,
         );
         const hopSegments = mode === 'hop'
             ? [...(this._hopSegmentLines?.values() || [])]
                 .reduce((sum, lines) => sum + lines.length, 0)
             : 0;
+        const storeLinks = this._store?.getTopologyEdges?.()?.length || 0;
         const graphLinks = snap?.edges?.length || 0;
         const modeLinks = mode === 'hop'
             ? (this._store?.getMapEdges('hop')?.length || 0)
-            : graphLinks;
+            : Math.max(storeLinks, graphLinks);
         const edgeLineCount = this._edgeLines?.size || 0;
         const linkCount = Math.max(
             drawnLinks,
             edgeLineCount,
             hopSegments,
             modeLinks,
+            storeLinks,
             graphLinks,
         );
         const darkFromStore = snap?.dark ?? snap?.unplotted?.length ?? 0;
@@ -1361,11 +1432,11 @@ class NodeMap {
 
         document.addEventListener('sidebar:routeActivated', (event) => {
             const route = event.detail?.route;
-            if (route === 'dashboard') {
-                requestAnimationFrame(recalc);
-                if (!this._topologyEnabled && this._topologyVisible) {
-                    this._redrawTopologyOverlayFromStore();
-                }
+            if (route === 'dashboard' && !this._topologyEnabled) {
+                setTimeout(() => this.activate(), 150);
+            }
+            if (route === 'topology' && this._topologyEnabled) {
+                setTimeout(() => this.activate(), 150);
             }
         });
 
