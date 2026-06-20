@@ -141,6 +141,27 @@ class PacketRepository:
         )
         return row["source_id"] if row else ""
 
+    async def get_meta_by_packet_id(self, packet_id: str) -> dict:
+        """Return source_id and hop_count for a stored packet (message enrichment)."""
+        if not packet_id:
+            return {}
+        row = await self._db.fetch_one(
+            """
+            SELECT source_id, hop_start, hop_limit
+            FROM packets WHERE packet_id = ? LIMIT 1
+            """,
+            (packet_id,),
+        )
+        if not row:
+            return {}
+        hop_start = row.get("hop_start", 0) or 0
+        hop_limit = row.get("hop_limit", 0) or 0
+        hop_count = max(0, hop_start - hop_limit) if hop_start > 0 else None
+        return {
+            "source_id": row.get("source_id") or "",
+            "hop_count": hop_count,
+        }
+
     async def get_by_source(
         self, source_id: str, limit: int = 100
     ) -> list[Packet]:

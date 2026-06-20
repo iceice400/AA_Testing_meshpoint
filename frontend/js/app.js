@@ -151,6 +151,7 @@ document.addEventListener('DOMContentLoaded', async () => {
             }
         },
     });
+    window.meshpointNodeDrawer = nodeDrawer;
 
     const nodeCards = new NodeCards('node-list', (node) => nodeDrawer.open(node));
 

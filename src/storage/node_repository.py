@@ -77,6 +77,34 @@ class NodeRepository:
             return None
         return self._row_to_node(row)
 
+    async def get_enriched_by_id(self, node_id: str) -> Optional[dict]:
+        """Node row with latest signal/hops from the most recent packet."""
+        for candidate in (node_id, node_id.upper(), node_id.lower()):
+            row = await self._db.fetch_one(
+                """
+                SELECT n.*,
+                       p.rssi AS latest_rssi,
+                       p.snr AS latest_snr,
+                       p.hop_limit AS latest_hop_limit,
+                       p.hop_start AS latest_hop_start
+                FROM nodes n
+                LEFT JOIN (
+                    SELECT source_id,
+                           rssi, snr, hop_limit, hop_start,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY source_id ORDER BY timestamp DESC
+                           ) AS rn
+                    FROM packets
+                ) p ON p.source_id = n.node_id AND p.rn = 1
+                WHERE n.node_id = ?
+                LIMIT 1
+                """,
+                (candidate,),
+            )
+            if row:
+                return self._enrich_row(row)
+        return None
+
     async def get_all(self, limit: int = 500) -> list[Node]:
         rows = await self._db.fetch_all(
             "SELECT * FROM nodes ORDER BY last_heard DESC LIMIT ?",

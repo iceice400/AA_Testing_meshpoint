@@ -127,6 +127,108 @@ class TestMessageNameResolver(unittest.TestCase):
         name = _run(self.resolver.resolve("a1b2c3d4", "meshtastic", ""))
         self.assertEqual(name, "TestNode")
 
+    def test_message_enrichment_includes_source_id_and_sender_meta(self):
+        from datetime import datetime, timezone
+
+        _run(self.node_repo.upsert(
+            Node(
+                node_id="7d8b98a9",
+                long_name="Guziii",
+                short_name="GZ",
+                protocol="meshtastic",
+                last_heard=datetime.now(timezone.utc),
+            )
+        ))
+
+        async def _seed_packet() -> None:
+            await self.packet_repo.insert(Packet(
+                packet_id="pkt-dm-1",
+                source_id="7d8b98a9",
+                destination_id="c0ffee42",
+                protocol=Protocol.MESHTASTIC,
+                packet_type=PacketType.TEXT,
+                hop_start=3,
+                hop_limit=1,
+                signal=SignalMetrics(
+                    rssi=-72.0,
+                    snr=6.5,
+                    frequency_mhz=906.875,
+                    spreading_factor=11,
+                    bandwidth_khz=250,
+                ),
+            ))
+            await self.db.commit()
+
+        _run(_seed_packet())
+        _run(self.message_repo.save_received(
+            text="Hello",
+            node_id="7d8b98a9",
+            node_name="Guzii",
+            protocol="meshtastic",
+            packet_id="pkt-dm-1",
+            rssi=-72.0,
+            snr=6.5,
+        ))
+
+        messages = _run(self.message_repo.get_conversation("7d8b98a9"))
+        enriched = _run(self.resolver.apply_to_message_dict(messages[0].to_dict()))
+        self.assertEqual(enriched["source_id"], "7d8b98a9")
+        self.assertEqual(enriched["node_name"], "Guziii")
+        meta = enriched.get("sender_meta") or {}
+        self.assertEqual(meta.get("node_id"), "7d8b98a9")
+        self.assertEqual(meta.get("display_name"), "Guziii")
+        self.assertEqual(meta.get("short_name"), "GZ")
+        self.assertEqual(meta.get("hop_count"), 2)
+        self.assertIsNotNone(meta.get("latest_rssi"))
+
+    def test_broadcast_message_enrichment_resolves_source_id(self):
+        _run(self.node_repo.upsert(
+            Node(
+                node_id="a1b2c3d4",
+                long_name="Broadcaster",
+                short_name="BC",
+                protocol="meshtastic",
+            )
+        ))
+
+        async def _seed_packet() -> None:
+            await self.packet_repo.insert(Packet(
+                packet_id="pkt-bcast-2",
+                source_id="a1b2c3d4",
+                destination_id="ffffffff",
+                protocol=Protocol.MESHTASTIC,
+                packet_type=PacketType.TEXT,
+                hop_start=2,
+                hop_limit=2,
+                signal=SignalMetrics(
+                    rssi=-88.0,
+                    snr=4.0,
+                    frequency_mhz=906.875,
+                    spreading_factor=11,
+                    bandwidth_khz=250,
+                ),
+            ))
+            await self.db.commit()
+
+        _run(_seed_packet())
+        _run(self.message_repo.save_received(
+            text="On air",
+            node_id="broadcast:meshtastic:0",
+            node_name="Broadcast",
+            protocol="meshtastic",
+            packet_id="pkt-bcast-2",
+        ))
+
+        messages = _run(
+            self.message_repo.get_conversation("broadcast:meshtastic:0")
+        )
+        enriched = _run(self.resolver.apply_to_message_dict(messages[0].to_dict()))
+        self.assertEqual(enriched["source_id"], "a1b2c3d4")
+        self.assertEqual(enriched["node_name"], "Broadcaster")
+        meta = enriched.get("sender_meta") or {}
+        self.assertEqual(meta.get("node_id"), "a1b2c3d4")
+        self.assertEqual(meta.get("hop_count"), 0)
+
 
 if __name__ == "__main__":
     unittest.main()

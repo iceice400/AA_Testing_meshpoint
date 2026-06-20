@@ -57,7 +57,25 @@ class MessagingPanel {
         const chatEl = document.getElementById('msg-chat-area');
 
         this._contacts = new MessagingContacts(listEl, (convo) => this._onConversationSelected(convo));
-        this._chat = new MessagingChat(chatEl, (text, convo) => this._onSendMessage(text, convo));
+        this._chat = new MessagingChat(chatEl, {
+            onSend: (text, convo) => this._onSendMessage(text, convo),
+            onOpenNode: (node) => {
+                if (window.meshpointNodeDrawer) {
+                    window.meshpointNodeDrawer.open(node);
+                }
+            },
+            onOpenDm: (convo) => this.openConversation(convo),
+            onViewOnMap: (lat, lon) => {
+                if (window.dashboardNodeMap) {
+                    window.dashboardNodeMap.centerOn(lat, lon);
+                    if (window.sidebar?._router) {
+                        window.sidebar._router.navigate('dashboard');
+                    } else if (location.hash !== '#/dashboard') {
+                        location.hash = '#/dashboard';
+                    }
+                }
+            },
+        });
 
         document.getElementById('msg-new-btn').addEventListener('click', () => {
             this._contacts.openContactPicker();
@@ -139,6 +157,7 @@ class MessagingPanel {
                     destination: destination,
                     protocol: convo.protocol || 'meshtastic',
                     channel: convo.channel || 0,
+                    want_ack: this._chat.getWantAck?.() || false,
                 }),
             });
 
@@ -196,6 +215,7 @@ class MessagingPanel {
                     packet_id: data.packet_id || '',
                     source_id: data.source_id || '',
                     destination_id: data.destination_id || '',
+                    sender_meta: data.sender_meta || null,
                 };
                 if (data.rssi != null) msg.rssi = data.rssi;
                 if (data.snr != null) msg.snr = data.snr;

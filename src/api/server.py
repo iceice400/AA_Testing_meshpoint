@@ -1097,7 +1097,9 @@ def _setup_message_interception(
     from src.api.message_name_resolver import MessageNameResolver
     from src.models.packet import PacketType, Protocol
 
-    name_resolver = MessageNameResolver(coord.node_repo, meshcore_tx)
+    name_resolver = MessageNameResolver(
+        coord.node_repo, meshcore_tx, coord.packet_repo
+    )
 
     our_node_id = config.transmit.node_id
     if our_node_id is None and tx_service is not None:
@@ -1341,6 +1343,19 @@ def _setup_message_interception(
                     packet.protocol.value,
                     node_name,
                 )
+                source_id = packet.source_id or ""
+                if is_broadcast and not source_id and packet.packet_id:
+                    pkt_meta = await coord.packet_repo.get_meta_by_packet_id(
+                        packet.packet_id
+                    )
+                    source_id = pkt_meta.get("source_id") or source_id
+                sender_meta = await name_resolver.build_sender_meta(
+                    source_id,
+                    packet.protocol.value,
+                    display_name,
+                    packet.packet_id or "",
+                    message_rssi=rssi,
+                )
                 ws_payload = {
                     "text": text,
                     "node_id": node_id,
@@ -1348,9 +1363,11 @@ def _setup_message_interception(
                     "protocol": packet.protocol.value,
                     "direction": direction,
                     "packet_id": packet.packet_id or "",
-                    "source_id": packet.source_id or "",
+                    "source_id": source_id,
                     "destination_id": packet.destination_id or "",
                 }
+                if sender_meta:
+                    ws_payload["sender_meta"] = sender_meta
                 if rssi is not None:
                     ws_payload["rssi"] = round(rssi, 1)
                 if snr is not None:

@@ -103,13 +103,108 @@ class MessageNameResolver:
                 out["node_name"] = stored
             else:
                 out["node_name"] = await self._resolve_broadcast_sender(out)
-            return out
-        out["node_name"] = await self.resolve(
-            node_id,
-            out.get("protocol", ""),
-            stored,
-        )
+        else:
+            out["node_name"] = await self.resolve(
+                node_id,
+                out.get("protocol", ""),
+                stored,
+            )
+
+        source_id = await self._resolve_source_id(out)
+        if source_id:
+            out["source_id"] = source_id
+            sender_meta = await self.build_sender_meta(
+                source_id,
+                out.get("protocol", ""),
+                out.get("node_name", ""),
+                out.get("packet_id", ""),
+                message_rssi=out.get("rssi"),
+            )
+            if sender_meta:
+                out["sender_meta"] = sender_meta
+
         return out
+
+    async def _resolve_source_id(self, message: dict[str, Any]) -> str:
+        direction = message.get("direction", "")
+        if direction == "sent":
+            return ""
+
+        node_id = message.get("node_id", "")
+        pkt_id = message.get("packet_id") or ""
+
+        if node_id.startswith("broadcast:"):
+            if pkt_id and self._packet_repo:
+                meta = await self._packet_repo.get_meta_by_packet_id(pkt_id)
+                return meta.get("source_id") or ""
+            return ""
+
+        if direction in ("received", "overheard") and node_id:
+            return node_id
+
+        if pkt_id and self._packet_repo:
+            meta = await self._packet_repo.get_meta_by_packet_id(pkt_id)
+            return meta.get("source_id") or ""
+
+        return node_id if node_id and not node_id.startswith("broadcast:") else ""
+
+    async def build_sender_meta(
+        self,
+        source_id: str,
+        protocol: str = "",
+        display_name: str = "",
+        packet_id: str = "",
+        message_rssi: float | None = None,
+    ) -> dict[str, Any]:
+        """Compact sender info for message popovers (REST + WebSocket)."""
+        if not source_id:
+            return {}
+
+        meta: dict[str, Any] = {
+            "node_id": source_id,
+            "display_name": display_name or source_id,
+        }
+
+        hop_count = None
+        if packet_id and self._packet_repo:
+            pkt_meta = await self._packet_repo.get_meta_by_packet_id(packet_id)
+            hop_count = pkt_meta.get("hop_count")
+
+        short_name = ""
+        if self._node_repo:
+            try:
+                enriched = await self._node_repo.get_enriched_by_id(source_id)
+                if enriched:
+                    meta["display_name"] = (
+                        display_name
+                        or enriched.get("long_name")
+                        or enriched.get("short_name")
+                        or source_id
+                    )
+                    short_name = enriched.get("short_name") or ""
+                    meta["last_heard"] = enriched.get("last_heard") or ""
+                    if enriched.get("latest_rssi") is not None:
+                        meta["latest_rssi"] = enriched.get("latest_rssi")
+                    if enriched.get("latest_hops") is not None:
+                        meta["latest_hops"] = enriched.get("latest_hops")
+                    if enriched.get("latitude") is not None:
+                        meta["latitude"] = enriched.get("latitude")
+                    if enriched.get("longitude") is not None:
+                        meta["longitude"] = enriched.get("longitude")
+            except Exception:
+                logger.debug(
+                    "Sender meta lookup failed for %s", source_id, exc_info=True
+                )
+
+        if short_name:
+            meta["short_name"] = short_name
+
+        if hop_count is not None:
+            meta["hop_count"] = hop_count
+        elif message_rssi is not None and meta.get("latest_rssi") is None:
+            meta["latest_rssi"] = message_rssi
+
+        return meta
 
     async def _resolve_broadcast_sender(self, message: dict[str, Any]) -> str:
         pkt_id = message.get("packet_id") or ""
