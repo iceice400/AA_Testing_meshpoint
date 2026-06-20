@@ -2,9 +2,13 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
+from typing import Callable, Optional
+
 from fastapi import APIRouter
 
 from src.api.websocket_manager import WebSocketManager
+from src.hal.concentrator_identity import chip_name, read_chip_version_from_journal
+from src.hal.sx1302_wrapper import SX1302Wrapper
 from src.models.device_identity import DeviceIdentity
 from src.relay.relay_manager import RelayManager
 from src.version import __version__
@@ -14,6 +18,7 @@ router = APIRouter(prefix="/api/device", tags=["device"])
 _identity: DeviceIdentity | None = None
 _ws_manager: WebSocketManager | None = None
 _relay_manager: RelayManager | None = None
+_get_wrapper: Callable[[], Optional[SX1302Wrapper]] | None = None
 _start_time: datetime = datetime.now(timezone.utc)
 
 
@@ -21,11 +26,14 @@ def init_routes(
     identity: DeviceIdentity,
     ws_manager: WebSocketManager,
     relay_manager: RelayManager,
+    *,
+    get_wrapper: Callable[[], Optional[SX1302Wrapper]] | None = None,
 ) -> None:
-    global _identity, _ws_manager, _relay_manager, _start_time
+    global _identity, _ws_manager, _relay_manager, _get_wrapper, _start_time
     _identity = identity
     _ws_manager = ws_manager
     _relay_manager = relay_manager
+    _get_wrapper = get_wrapper
     _start_time = datetime.now(timezone.utc)
 
 
@@ -38,6 +46,13 @@ async def device_info():
 async def device_status():
     uptime = (datetime.now(timezone.utc) - _start_time).total_seconds()
     relay_stats = _relay_manager.get_stats() if _relay_manager else {}
+    chip_version = None
+    if _get_wrapper is not None:
+        wrapper = _get_wrapper()
+        if wrapper is not None:
+            chip_version = wrapper.chip_version
+    if chip_version is None:
+        chip_version = read_chip_version_from_journal()
     return {
         "status": "running",
         "uptime_seconds": int(uptime),
@@ -45,4 +60,10 @@ async def device_status():
         "device_id": _identity.device_id,
         "firmware_version": __version__,
         "relay": relay_stats,
+        "concentrator": {
+            "chip_name": chip_name(chip_version),
+            "chip_version_hex": (
+                f"0x{chip_version:02x}" if chip_version is not None else None
+            ),
+        },
     }

@@ -27,7 +27,6 @@ from src.storage.telemetry_repository import TelemetryRepository
 logger = logging.getLogger(__name__)
 
 _SOURCE_LABELS = {
-    "concentrator": "concentrator (8-ch SX1302)",
     "serial": "serial radio",
     "meshcore_usb": "MeshCore USB node",
     "mock": "mock source",
@@ -159,6 +158,7 @@ class PipelineCoordinator:
         self._setup_location_banner()
         await self._location_source.start()
         await self._capture.start()
+        self._log_native_relay_backend()
 
         self._running = True
         self._pipeline_task = asyncio.create_task(
@@ -171,8 +171,9 @@ class PipelineCoordinator:
             self._location_refresh_loop(), name="location-refresh"
         )
         registered = [src.name for src in self._capture._sources]
+        chip_version = self._concentrator_chip_version()
         sources = ", ".join(
-            _SOURCE_LABELS.get(s, s) for s in registered
+            self._source_label(name, chip_version) for name in registered
         ) or "none"
         logger.info(
             f" {CYAN}--{RESET} {GREEN}PIPELINE{RESET}  started  "
@@ -429,11 +430,6 @@ class PipelineCoordinator:
         legacy_configured = bool(self._config.relay.serial_port)
 
         if native_available:
-            logger.info(
-                f" {CYAN}--{RESET} {GREEN}RELAY{RESET}    "
-                f"native onboard SX1302  "
-                f"{DIM}max {self._config.relay.max_relay_per_minute}/min{RESET}"
-            )
             return
 
         if not legacy_configured:
@@ -501,6 +497,34 @@ class PipelineCoordinator:
         for name, key in self._config.meshcore.channel_keys.items():
             key_b64 = base64.b64encode(binascii.unhexlify(key)).decode()
             self._crypto.add_channel_key(name, key_b64)
+
+    @staticmethod
+    def _source_label(source_name: str, chip_version: int | None) -> str:
+        if source_name == "concentrator":
+            from src.hal.concentrator_identity import concentrator_source_label
+            return concentrator_source_label(chip_version)
+        return _SOURCE_LABELS.get(source_name, source_name)
+
+    def _concentrator_chip_version(self) -> int | None:
+        for src in self._capture._sources:
+            if src.name != "concentrator":
+                continue
+            wrapper = getattr(src, "_wrapper", None)
+            if wrapper is not None:
+                return wrapper.chip_version
+        return None
+
+    def _log_native_relay_backend(self) -> None:
+        if not self._config.transmit.enabled:
+            return
+        from src.hal.concentrator_identity import relay_backend_label
+
+        chip_version = self._concentrator_chip_version()
+        logger.info(
+            f" {CYAN}--{RESET} {GREEN}RELAY{RESET}    "
+            f"{relay_backend_label(chip_version)}  "
+            f"{DIM}max {self._config.relay.max_relay_per_minute}/min{RESET}"
+        )
 
     def _setup_location_banner(self) -> None:
         """One-line startup banner matching the RELAY/MQTT/PIPELINE rows."""

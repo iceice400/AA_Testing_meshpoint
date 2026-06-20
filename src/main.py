@@ -82,7 +82,8 @@ async def run_standalone() -> None:
 
     coordinator.on_packet(lambda pkt: print_packet(pkt))
     await coordinator.start()
-    print_banner(config)
+    chip_version = coordinator._concentrator_chip_version()
+    print_banner(config, chip_version=chip_version)
     logger.info("Standalone mode -- listening for packets")
 
     try:

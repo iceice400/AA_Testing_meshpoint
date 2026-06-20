@@ -81,3 +81,15 @@ def chip_status_label(version: Optional[int]) -> str:
     if version in _CHIP_NAMES:
         return "ok"
     return "unrecognized"
+
+
+def concentrator_source_label(chip_version: Optional[int] = None) -> str:
+    """Human label for capture/startup banners, e.g. ``concentrator (8-ch SX1303)``."""
+    chip = chip_name(chip_version) or "SX1302/SX1303"
+    return f"concentrator (8-ch {chip})"
+
+
+def relay_backend_label(chip_version: Optional[int] = None) -> str:
+    """Short relay log label, e.g. ``native onboard SX1303``."""
+    chip = chip_name(chip_version) or "concentrator"
+    return f"native onboard {chip}"

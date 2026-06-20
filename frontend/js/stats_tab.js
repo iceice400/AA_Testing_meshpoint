@@ -372,7 +372,9 @@ class StatsTab {
         const pkts = traffic.total_packets ?? live.total_packets ?? 0;
         const rate = traffic.packets_per_minute ?? live.packets_per_minute;
         const items = [
-            device.name || 'concentrator',
+            device.concentrator_chip
+                ? `${device.concentrator_chip} concentrator`
+                : (device.name || 'concentrator'),
             `${Number(pkts).toLocaleString()} pkts`,
         ];
         if (rate) {

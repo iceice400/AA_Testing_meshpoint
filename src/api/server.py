@@ -309,7 +309,9 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
             topology_poller=_topology_poller,
         )
         _init_dangerous_registry(pipeline)
-        print_banner(config)
+        wrapper = _get_concentrator_wrapper(pipeline)
+        chip_version = wrapper.chip_version if wrapper else None
+        print_banner(config, chip_version=chip_version)
         logger.info("Meshpoint started -- listening for packets")
         yield
         if _spectral_scan_service is not None:
@@ -789,8 +791,12 @@ def _wire_native_relay(
 
     relay.set_transmit_function(_native_relay)
     relay.set_local_node_id(f"{tx_service.source_node_id:08x}")
+    wrapper = _get_concentrator_wrapper(coord)
+    chip_version = wrapper.chip_version if wrapper else None
+    from src.hal.concentrator_identity import relay_backend_label
     logger.info(
-        "Relay backend: native onboard SX1302 (identity-preserving)"
+        "Relay backend: %s (identity-preserving)",
+        relay_backend_label(chip_version),
     )
 
 
@@ -1451,7 +1457,12 @@ def _init_routes(
         send_position_request=send_position_request if meshtastic_tx else None,
         meshtastic_tx_enabled=meshtastic_tx,
     )
-    device.init_routes(identity, ws_manager, coord.relay_manager)
+    device.init_routes(
+        identity,
+        ws_manager,
+        coord.relay_manager,
+        get_wrapper=lambda: _get_concentrator_wrapper(coord),
+    )
     telemetry.init_routes(coord.telemetry_repo)
     stats_routes.init_routes(
         stats_reporter=coord.stats_reporter,

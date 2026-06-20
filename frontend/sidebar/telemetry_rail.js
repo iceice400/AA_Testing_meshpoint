@@ -19,6 +19,7 @@ class SidebarTelemetryRail {
         this._ws = dashboardWs;
         this._uptimeEl = rootEl.querySelector('#telemetry-uptime');
         this._sessionsEl = rootEl.querySelector('#telemetry-sessions');
+        this._concentratorEl = rootEl.querySelector('#telemetry-concentrator');
         this._noiseEl = rootEl.querySelector('#telemetry-noise-value');
         this._noiseBwEl = rootEl.querySelector('#telemetry-noise-bw');
         this._noiseChip = rootEl.querySelector('.telemetry-rail__noise');
@@ -50,6 +51,20 @@ class SidebarTelemetryRail {
             const sessions = data.websocket_clients;
             if (typeof sessions === 'number') {
                 this._sessionsEl.textContent = String(sessions);
+            }
+            const conc = data.concentrator || {};
+            if (this._concentratorEl) {
+                const chip = conc.chip_name;
+                const hex = conc.chip_version_hex;
+                if (chip && hex) {
+                    this._concentratorEl.textContent = `${chip} (${hex})`;
+                    this._concentratorEl.title = 'LoRa concentrator ASIC on the Pi HAT';
+                } else if (chip) {
+                    this._concentratorEl.textContent = chip;
+                } else {
+                    this._concentratorEl.textContent = '--';
+                    this._concentratorEl.title = '';
+                }
             }
         } catch (_e) { /* swallow; next tick will retry */ }
     }

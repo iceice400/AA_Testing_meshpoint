@@ -173,6 +173,8 @@ async def stats_hourly(hours: int = Query(24, ge=1, le=168)):
 
 
 def _get_device_context() -> dict:
+    from src.hal.concentrator_identity import chip_name, read_chip_version_from_journal
+
     try:
         config = load_config()
         name = config.device.device_name or "Meshpoint"
@@ -186,12 +188,19 @@ def _get_device_context() -> dict:
         uptime_s = int((datetime.now(timezone.utc) - _start_time).total_seconds())
     days_online = max(1, uptime_s // 86400) if uptime_s > 0 else 0
 
+    chip_version = read_chip_version_from_journal()
+    chip = chip_name(chip_version)
+
     return {
         "name": name,
         "region": region,
         "firmware": __version__,
         "uptime_seconds": uptime_s,
         "days_online": days_online,
+        "concentrator_chip": chip,
+        "concentrator_chip_hex": (
+            f"0x{chip_version:02x}" if chip_version is not None else None
+        ),
     }
 
 

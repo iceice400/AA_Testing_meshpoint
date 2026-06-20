@@ -53,11 +53,21 @@ class TestHardwareRoute(unittest.TestCase):
 
 class TestConcentratorIdentity(unittest.TestCase):
     def test_chip_name_mapping(self) -> None:
-        from src.hal.concentrator_identity import chip_name, module_hint
+        from src.hal.concentrator_identity import (
+            chip_name,
+            concentrator_source_label,
+            module_hint,
+            relay_backend_label,
+        )
 
         self.assertEqual(chip_name(0x12), "SX1303")
         self.assertEqual(chip_name(0x10), "SX1302")
         self.assertIn("RAK5146", module_hint(0x12, "rak") or "")
+        self.assertEqual(
+            concentrator_source_label(0x12),
+            "concentrator (8-ch SX1303)",
+        )
+        self.assertEqual(relay_backend_label(0x12), "native onboard SX1303")
 
 
 if __name__ == "__main__":
