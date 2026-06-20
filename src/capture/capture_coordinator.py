@@ -88,3 +88,14 @@ class CaptureCoordinator:
     @property
     def queue_size(self) -> int:
         return self._queue.qsize()
+
+    def concentrator_rx_stats(self) -> dict:
+        for source in self._sources:
+            wrapper = getattr(source, "_wrapper", None)
+            if wrapper is not None:
+                return {
+                    "crc_bad_total": wrapper.crc_bad_count,
+                    "no_crc_total": wrapper.no_crc_count,
+                    "unknown_status_total": wrapper.unknown_status_count,
+                }
+        return {}

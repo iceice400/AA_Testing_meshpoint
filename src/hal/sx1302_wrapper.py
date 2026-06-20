@@ -117,6 +117,23 @@ class SX1302Wrapper:
         self._gps_pps_tty = "/dev/ttyAMA0"
         self._gps_family = "ubx7"
         self._gps_pps_baud = 0
+        self._chip_version: Optional[int] = None
+
+    @property
+    def chip_version(self) -> Optional[int]:
+        return self._chip_version
+
+    @property
+    def spi_path(self) -> str:
+        return self._spi_path
+
+    @property
+    def lib_path(self) -> Optional[str]:
+        return self._lib_path
+
+    @property
+    def started(self) -> bool:
+        return self._started
 
     @property
     def gps_pps(self) -> Optional[HalGpsPpsSync]:
@@ -206,6 +223,7 @@ class SX1302Wrapper:
         if result != LGW_HAL_SUCCESS:
             raise RuntimeError("lgw_start() failed")
         self._started = True
+        self._chip_version = self._probe_chip_version()
         logger.info("SX1302 concentrator started")
         if self._gps_pps_enabled and self._lib is not None:
             self._gps_pps = HalGpsPpsSync(
@@ -224,6 +242,22 @@ class SX1302Wrapper:
             self._lib.lgw_stop()
             self._started = False
             logger.info("SX1302 concentrator stopped")
+
+    def _probe_chip_version(self) -> Optional[int]:
+        """Read concentrator ASIC version when HAL exposes it or from journal."""
+        from src.hal.concentrator_identity import read_chip_version_from_journal
+
+        if self._lib is not None:
+            for name in ("lgw_get_chip_version", "lgw_board_getchipversion"):
+                if hasattr(self._lib, name):
+                    fn = getattr(self._lib, name)
+                    fn.restype = ctypes.c_uint8
+                    fn.argtypes = []
+                    try:
+                        return int(fn())
+                    except Exception:
+                        logger.debug("HAL %s probe failed", name, exc_info=True)
+        return read_chip_version_from_journal()
 
     def receive(self) -> list[ConcentratorPacket]:
         """Poll for received packets. Non-blocking.

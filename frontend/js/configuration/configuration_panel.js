@@ -133,6 +133,7 @@ class ConfigurationPanel {
             const host = document.getElementById('cfg-advanced-panel');
             if (host) {
                 host.innerHTML = `
+                    <div data-cfg-hardware></div>
                     <div data-cfg-advanced></div>
                     <div data-cfg-meshradar></div>
                     <div data-cfg-relay-filters></div>
@@ -140,6 +141,11 @@ class ConfigurationPanel {
                     <div data-cfg-relay-topology></div>
                     <div data-cfg-webhooks></div>
                 `;
+                if (window.HardwareConfigCard) {
+                    const hw = new window.HardwareConfigCard(api);
+                    hw.mount(host.querySelector('[data-cfg-hardware]'));
+                    this._cards.set('hardware', hw);
+                }
                 if (window.AdvancedConfigCard) {
                     const card = new window.AdvancedConfigCard(api);
                     card.mount(host.querySelector('[data-cfg-advanced]'));

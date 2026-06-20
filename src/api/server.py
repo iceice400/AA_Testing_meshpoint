@@ -50,6 +50,7 @@ from src.api.routes import (
     firmware_routes,
     gps_pps_status,
     gps_status,
+    hardware_routes,
     identity_routes,
     messages,
     meshcore_config_routes,
@@ -364,6 +365,7 @@ def create_app(config: AppConfig | None = None) -> FastAPI:
     app.include_router(device_config_routes.router, dependencies=protected)
     app.include_router(gps_status.router, dependencies=protected)
     app.include_router(gps_pps_status.router, dependencies=protected)
+    app.include_router(hardware_routes.router, dependencies=protected)
     app.include_router(system_config_routes.router, dependencies=protected)
     app.include_router(meshcore_config_routes.router, dependencies=protected)
     app.include_router(config_routes.router, dependencies=protected)
@@ -1518,6 +1520,25 @@ def _init_routes(
     stray_frames_routes.init_routes(coord.stray_frame_repository)
     gps_pps_status.init_routes(
         get_wrapper=lambda: _get_concentrator_wrapper(coord),
+    )
+
+    def _gps_runtime_status() -> dict:
+        try:
+            return coord.location_source.get_status().to_dict()
+        except Exception:
+            return {}
+
+    def _pps_runtime_status() -> dict:
+        wrapper = _get_concentrator_wrapper(coord)
+        if wrapper and wrapper.gps_pps is not None:
+            return wrapper.gps_pps.get_status().to_dict()
+        return {}
+
+    hardware_routes.init_routes(
+        config=config,
+        get_wrapper=lambda: _get_concentrator_wrapper(coord),
+        get_gps_status=_gps_runtime_status,
+        get_pps_status=_pps_runtime_status,
     )
     mc_usb = config.capture.meshcore_usb
     firmware_routes.init_routes(

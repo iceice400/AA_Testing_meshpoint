@@ -62,6 +62,11 @@ def cmd_reset_password(_args: argparse.Namespace) -> None:
     sys.exit(run_reset_password())
 
 
+def cmd_hardware(args: argparse.Namespace) -> None:
+    from src.cli.hardware_command import show_hardware
+    show_hardware(json_output=getattr(args, "json", False))
+
+
 def cmd_version(_args: argparse.Namespace) -> None:
     print(f"  Meshpoint v{VERSION}")
 
@@ -76,6 +81,8 @@ def main() -> None:
     sub.add_parser("setup", help="Run the interactive setup wizard")
     sub.add_parser("status", help="Show device status and health")
     sub.add_parser("report", help="Full operational report (requires running service)")
+    hw = sub.add_parser("hardware", help="Show concentrator hardware diagnostics")
+    hw.add_argument("--json", action="store_true", help="Emit probe JSON before live API block")
     sub.add_parser("logs", help="Tail the service logs (journalctl)")
     sub.add_parser("restart", help="Restart the meshpoint service")
     sub.add_parser("stop", help="Stop the meshpoint service")
@@ -106,6 +113,7 @@ def main() -> None:
         "setup": cmd_setup,
         "status": cmd_status,
         "report": cmd_report,
+        "hardware": cmd_hardware,
         "logs": cmd_logs,
         "restart": cmd_restart,
         "stop": cmd_stop,
